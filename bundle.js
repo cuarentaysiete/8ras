@@ -1,4 +1,5 @@
 /* 8RAS Time Tracker — Adobe Photoshop UXP Plugin (Vanilla JS) */
+/* Version without any require() calls — pure DOM for testing */
 
 // ─── Configuration ────────────────────────────────────────────────
 var STORAGE_PATH = '/Users/Shared/8ras-data'; // Edit before loading in PS
@@ -25,13 +26,12 @@ var lastAction = null;
 var resolvedFolder = null;
 var _uxpAvailable = false;
 var psApp = null;
+var useRealStorage = true; // Set to false when testing in UDT
 
 // Try to get Photoshop app reference (may fail in UDT)
 try { psApp = require('photoshop').app; } catch(e) { psApp = null; }
 
 // ─── UXP File System Helpers ──────────────────────────────────────
-// All file operations wrapped in try/catch — never throw to caller
-
 function padStart(str, len, ch) {
   str = String(str);
   while (str.length < len) str = ch + str;
@@ -62,18 +62,6 @@ function resolvePath(fileSystem, path) {
     if (parts[i].length > 0) filtered.push(parts[i]);
   }
   var current = fileSystem.root;
-  for (var i = 0; i < filtered.length; i++) {
-    (function(idx) {
-      current.getFolder(filtered[idx]).then(function(folder) {
-        current = folder;
-      }).catch(function() {
-        current.createFolder(filtered[idx]).then(function(folder) {
-          current = folder;
-        });
-      });
-    })(i);
-  }
-  // Return a promise-based result
   return new Promise(function(resolve, reject) {
     (function recurse(idx, callback) {
       if (idx >= filtered.length) {
@@ -96,13 +84,8 @@ function resolvePath(fileSystem, path) {
   });
 }
 
-function resolveFilePath(filename) {
-  return resolvedFolder.getFile(filename).catch(function() {
-    return resolvedFolder.createFile(filename);
-  });
-}
-
 function setupStorageFolder() {
+  if (!useRealStorage) return Promise.resolve(true);
   return getFileSystem().then(function(fileSystem) {
     return resolvePath(fileSystem, STORAGE_PATH).then(function(folder) {
       resolvedFolder = folder;
@@ -122,6 +105,7 @@ function setupStorageFolder() {
 }
 
 function trySetupStorageSilently() {
+  if (!useRealStorage) return;
   getFileSystem().then(function(fileSystem) {
     return resolvePath(fileSystem, STORAGE_PATH).then(function(folder) {
       resolvedFolder = folder;
@@ -188,6 +172,12 @@ function exportToCSV() {
   });
 }
 
+function resolveFilePath(filename) {
+  return resolvedFolder.getFile(filename).catch(function() {
+    return resolvedFolder.createFile(filename);
+  });
+}
+
 // ─── Session Persistence ──────────────────────────────────────────
 function persistSessionData(seconds) {
   if (!_uxpAvailable || !resolvedFolder) return Promise.resolve();
@@ -206,7 +196,6 @@ function persistSessionData(seconds) {
 
 function restoreSession() {
   if (!_uxpAvailable || !resolvedFolder) return Promise.resolve(false);
-  return resolvedFolder.getSession ? Promise.resolve(false) : Promise.resolve(false);
   return resolvedFolder.getFile(sessionFile).then(function(file) {
     return file.read({ format: 'text' });
   }).then(function(content) {
