@@ -159,8 +159,6 @@ async function persistSessionData(seconds) {
 async function restoreSession() {
   try {
     if (!_uxpAvailable || !resolvedFolder) return false;
-    var file = await resolvedFolder.getSession ? resolvedFolder : null;
-    if (!file) return false;
     file = await resolvedFolder.getFile(sessionFile);
     var content = await file.read({ format: 'text' });
     var data = JSON.parse(content);
