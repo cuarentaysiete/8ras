@@ -1,18 +1,15 @@
 /* 8RAS Time Tracker — Adobe Photoshop UXP Plugin (Vanilla JS) */
-/* Version without any require() calls — pure DOM for testing */
+/* STRIPPED DOWN: No require(), no async/await, no modern JS */
+/* Pure synchronous DOM for debugging */
 
-// ─── Configuration ────────────────────────────────────────────────
-var STORAGE_PATH = '/Users/Shared/8ras-data'; // Edit before loading in PS
-var IDLE_TIMEOUT = 60; // seconds of inactivity before pause
+var STORAGE_PATH = '/Users/Shared/8ras-data';
+var IDLE_TIMEOUT = 60;
 var SUPPORTED_ACTIONS = [
   'brush', 'penTool', 'move', 'typeCreateOrChange',
   'setNewHue', 'freeTransform', 'pathComponentOperation', 'adjustment'
 ];
 
-// ─── State ────────────────────────────────────────────────────────
-var metricsFile = 'metrics.json';
-var tokenFile = 'token.txt';
-var sessionFile = 'session.json';
+// State
 var currentView = 'setup';
 var settings = { idleTimeout: IDLE_TIMEOUT };
 var clickHandlers = {};
@@ -23,228 +20,49 @@ var sessionStartTime = null;
 var isActive = false;
 var lastActionTime = null;
 var lastAction = null;
-var resolvedFolder = null;
-var _uxpAvailable = false;
-var psApp = null;
-var useRealStorage = true; // Set to false when testing in UDT
-
-// Try to get Photoshop app reference (may fail in UDT)
-try { psApp = require('photoshop').app; } catch(e) { psApp = null; }
-
-// ─── UXP File System Helpers ──────────────────────────────────────
-function padStart(str, len, ch) {
-  str = String(str);
-  while (str.length < len) str = ch + str;
-  return str;
-}
-
-function padStartNum(num, len) {
-  return padStart(String(num), len, '0');
-}
-
-function arrayIncludes(arr, val) {
-  for (var i = 0; i < arr.length; i++) {
-    if (arr[i] === val) return true;
-  }
-  return false;
-}
-
-function getFileSystem() {
-  var uxp = require('uxp');
-  var session = uxp.storage.session;
-  return session.requestFileSystem();
-}
-
-function resolvePath(fileSystem, path) {
-  var parts = path.split('/');
-  var filtered = [];
-  for (var i = 0; i < parts.length; i++) {
-    if (parts[i].length > 0) filtered.push(parts[i]);
-  }
-  var current = fileSystem.root;
-  return new Promise(function(resolve, reject) {
-    (function recurse(idx, callback) {
-      if (idx >= filtered.length) {
-        callback(null, current);
-        return;
-      }
-      current.getFolder(filtered[idx]).then(function(folder) {
-        current = folder;
-        recurse(idx + 1, callback);
-      }).catch(function() {
-        current.createFolder(filtered[idx]).then(function(folder) {
-          current = folder;
-          recurse(idx + 1, callback);
-        });
-      });
-    })(0, function(err, folder) {
-      if (err) reject(err);
-      else resolve(folder);
-    });
-  });
-}
-
-function setupStorageFolder() {
-  if (!useRealStorage) return Promise.resolve(true);
-  return getFileSystem().then(function(fileSystem) {
-    return resolvePath(fileSystem, STORAGE_PATH).then(function(folder) {
-      resolvedFolder = folder;
-      return folder.getFile(metricsFile).catch(function() {
-        return folder.createFile(metricsFile).then(function(f) {
-          return f.write(JSON.stringify({ entries: [] }), { format: 'text' });
-        });
-      }).then(function() {
-        _uxpAvailable = true;
-        return true;
-      });
-    });
-  }).catch(function(e) {
-    console.warn('Storage setup failed:', e.message);
-    return false;
-  });
-}
-
-function trySetupStorageSilently() {
-  if (!useRealStorage) return;
-  getFileSystem().then(function(fileSystem) {
-    return resolvePath(fileSystem, STORAGE_PATH).then(function(folder) {
-      resolvedFolder = folder;
-      return folder.getFile(metricsFile).catch(function() {
-        return folder.createFile(metricsFile).then(function(f) {
-          return f.write(JSON.stringify({ entries: [] }), { format: 'text' });
-        });
-      }).then(function() {
-        _uxpAvailable = true;
-      });
-    }).catch(function() {});
-  }).catch(function() {});
-}
-
-function readMetrics() {
-  if (!_uxpAvailable || !resolvedFolder) {
-    return Promise.resolve({ entries: [] });
-  }
-  return resolvedFolder.getFile(metricsFile).then(function(file) {
-    return file.read({ format: 'text' });
-  }).then(function(content) {
-    return JSON.parse(content);
-  }).catch(function() {
-    return { entries: [] };
-  });
-}
-
-function writeMetrics(metrics) {
-  if (!_uxpAvailable || !resolvedFolder) return Promise.resolve();
-  return resolveFilePath(metricsFile).then(function(file) {
-    return file.write(JSON.stringify(metrics, null, 2), { format: 'text' });
-  }).catch(function() {
-    return Promise.resolve();
-  });
-}
-
-function saveToken(token) {
-  if (!_uxpAvailable || !resolvedFolder) return Promise.resolve();
-  return resolveFilePath(tokenFile).then(function(file) {
-    return file.write(token, { format: 'text' });
-  }).catch(function() {
-    return Promise.resolve();
-  });
-}
-
-function restoreToken() {
-  if (!_uxpAvailable || !resolvedFolder) return Promise.resolve(null);
-  return resolvedFolder.getFile(tokenFile).then(function(file) {
-    return file.read({ format: 'text' });
-  }).then(function(content) {
-    return content.trim();
-  }).catch(function() {
-    return Promise.resolve(null);
-  });
-}
-
-function exportToCSV() {
-  return readMetrics().then(function(metrics) {
-    var csv = 'Date,Action,Duration (seconds)\n';
-    for (var i = 0; i < metrics.entries.length; i++) {
-      csv += '"' + metrics.entries[i].date + '",' + metrics.entries[i].action + ',' + metrics.entries[i].duration + '\n';
-    }
-    return csv;
-  });
-}
-
-function resolveFilePath(filename) {
-  return resolvedFolder.getFile(filename).catch(function() {
-    return resolvedFolder.createFile(filename);
-  });
-}
-
-// ─── Session Persistence ──────────────────────────────────────────
-function persistSessionData(seconds) {
-  if (!_uxpAvailable || !resolvedFolder) return Promise.resolve();
-  var data = JSON.stringify({
-    active: isActive,
-    startTime: sessionStartTime,
-    elapsed: seconds || 0,
-    lastAction: lastAction
-  });
-  return resolveFilePath(sessionFile).then(function(file) {
-    return file.write(data, { format: 'text' });
-  }).catch(function() {
-    return Promise.resolve();
-  });
-}
-
-function restoreSession() {
-  if (!_uxpAvailable || !resolvedFolder) return Promise.resolve(false);
-  return resolvedFolder.getFile(sessionFile).then(function(file) {
-    return file.read({ format: 'text' });
-  }).then(function(content) {
-    var data = JSON.parse(content);
-    isActive = data.active;
-    sessionStartTime = data.startTime;
-    lastActionTime = data.lastAction;
-    lastAction = data.lastAction;
-    return true;
-  }).catch(function() {
-    return false;
-  });
-}
+var metricsEntries = []; // In-memory fallback
 
 // ─── Tracking Engine ──────────────────────────────────────────────
 function resetIdleTimer(now) {
   lastActionTime = now || Date.now();
   if (idleTimer) clearTimeout(idleTimer);
   if (isActive) {
-    idleTimer = setTimeout(function() {
-      pauseTracking();
-    }, settings.idleTimeout * 1000);
+    idleTimer = setTimeout(function() { pauseTracking(); }, settings.idleTimeout * 1000);
   }
 }
 
 function startTracking(action) {
-  if (!arrayIncludes(SUPPORTED_ACTIONS, action)) return;
+  var i;
+  for (i = 0; i < SUPPORTED_ACTIONS.length; i++) {
+    if (SUPPORTED_ACTIONS[i] === action) break;
+  }
+  if (i >= SUPPORTED_ACTIONS.length) return;
   isActive = true;
   lastAction = action;
   if (!sessionStartTime) sessionStartTime = Date.now();
   resetIdleTimer();
-  persistSessionData(getElapsed());
 }
 
 function pauseTracking() {
   if (!isActive) return;
   var duration = getElapsed();
   if (duration > 0) {
-    addToMetrics(lastActionTime, duration, lastAction || 'unknown');
+    metricsEntries.push({ date: new Date(lastActionTime).toISOString(), duration: duration, action: lastAction || 'unknown' });
   }
   isActive = false;
   sessionStartTime = null;
-  persistSessionData(0);
   updateTimerDisplay();
 }
 
 function getElapsed() {
   if (!sessionStartTime) return 0;
   return Math.floor((Date.now() - sessionStartTime) / 1000);
+}
+
+function padStartNum(num, len) {
+  var s = String(num);
+  while (s.length < len) s = '0' + s;
+  return s;
 }
 
 function formatTime(totalSeconds) {
@@ -254,26 +72,16 @@ function formatTime(totalSeconds) {
   return (h > 0 ? h + ':' : '') + padStartNum(m, h > 0 ? 2 : 1) + ':' + padStartNum(s, 2);
 }
 
-function addToMetrics(date, duration, action) {
-  readMetrics().then(function(metrics) {
-    metrics.entries.push({
-      date: new Date(date).toISOString(),
-      duration: duration,
-      action: action || 'unknown'
-    });
-    writeMetrics(metrics);
-  });
-}
-
 // ─── Photoshop Notifications ──────────────────────────────────────
+var psApp = null;
+try { psApp = require('photoshop').app; } catch(e) { psApp = null; }
+
 function startListening() {
   try {
     if (psApp && typeof psApp.addEventListener === 'function') {
       psApp.addEventListener('notification', onPhotoshopEvent);
     }
-  } catch (e) {
-    // Silently fail
-  }
+  } catch (e) {}
 }
 
 function stopListening() {
@@ -281,19 +89,20 @@ function stopListening() {
     if (psApp && typeof psApp.removeEventListener === 'function') {
       psApp.removeEventListener('notification', onPhotoshopEvent);
     }
-  } catch (e) {
-    // Silently fail
-  }
+  } catch (e) {}
 }
 
 function onPhotoshopEvent(notification) {
   if (!notification || !notification.commandId) return;
   var cmd = notification.commandId;
-  if (arrayIncludes(SUPPORTED_ACTIONS, cmd)) {
-    startTracking(cmd);
-    if (currentView === 'timer') {
-      updateTimerDisplay();
-    }
+  var i;
+  for (i = 0; i < SUPPORTED_ACTIONS.length; i++) {
+    if (SUPPORTED_ACTIONS[i] === cmd) break;
+  }
+  if (i >= SUPPORTED_ACTIONS.length) return;
+  startTracking(cmd);
+  if (currentView === 'timer') {
+    updateTimerDisplay();
   }
 }
 
@@ -344,27 +153,16 @@ function renderSetupView() {
   containerEl.appendChild(btnContainer);
 
   registerClick('initStorageBtn', function() {
-    setupStorageFolder().then(function(ok) {
-      document.getElementById('statusText').textContent =
-        ok ? 'Storage ready! Click Start Tracking.' : 'Storage setup failed.';
-    }).catch(function(e) {
-      document.getElementById('statusText').textContent = 'Storage error: ' + e.message;
-    });
+    document.getElementById('statusText').textContent =
+      'Storage initialized! Click Start Tracking.';
   });
 
   registerClick('startBtn', function() {
     currentView = 'timer';
     render();
     startListening();
-    restoreSession().then(function(restored) {
-      if (restored && isActive) {
-        sessionStartTime = Date.now() - (getElapsed() * 1000);
-        updateTimerDisplay();
-      } else {
-        sessionStartTime = null;
-        updateTimerDisplay();
-      }
-    });
+    sessionStartTime = null;
+    updateTimerDisplay();
   });
 }
 
@@ -374,7 +172,8 @@ function renderMainView() {
   var tabs = document.createElement('div');
   tabs.className = 'tabs';
   var tabNames = ['Timer', 'Dashboard', 'Settings'];
-  for (var ti = 0; ti < tabNames.length; ti++) {
+  var ti;
+  for (ti = 0; ti < tabNames.length; ti++) {
     (function(tabName) {
       var btn = document.createElement('button');
       btn.textContent = tabName;
@@ -423,11 +222,7 @@ function renderTimerContent() {
   content.appendChild(controls);
 
   registerClick('pauseBtn', function() {
-    if (isActive) {
-      pauseTracking();
-    } else {
-      startTracking(lastAction || 'manual');
-    }
+    if (isActive) { pauseTracking(); } else { startTracking(lastAction || 'manual'); }
     updateTimerDisplay();
   });
 
@@ -440,22 +235,15 @@ function renderTimerContent() {
 
   if (timerInterval) clearInterval(timerInterval);
   timerInterval = setInterval(function() {
-    if (isActive) {
-      updateTimerDisplay();
-      persistSessionData(getElapsed());
-    }
+    if (isActive) { updateTimerDisplay(); }
   }, 1000);
 }
 
 function updateTimerDisplay() {
   var display = document.getElementById('timerDisplay');
-  if (display) {
-    display.textContent = formatTime(getElapsed());
-  }
+  if (display) display.textContent = formatTime(getElapsed());
   var status = document.getElementById('timerStatus');
-  if (status) {
-    status.textContent = isActive ? 'Active' : 'Paused';
-  }
+  if (status) status.textContent = isActive ? 'Active' : 'Paused';
 }
 
 function renderDashboardView() {
@@ -464,58 +252,60 @@ function renderDashboardView() {
   content.innerHTML = '';
 
   var title = document.createElement('h3');
-  title.textContent = 'Weekly Dashboard';
+  title.textContent = 'Weekly Dashboard (' + metricsEntries.length + ' entries)';
   content.appendChild(title);
 
-  readMetrics().then(function(metrics) {
-    var weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    var weeklyEntries = [];
-    for (var i = 0; i < metrics.entries.length; i++) {
-      if (new Date(metrics.entries[i].date).getTime() > weekAgo) {
-        weeklyEntries.push(metrics.entries[i]);
-      }
+  var weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  var weeklyEntries = [];
+  var ei;
+  for (ei = 0; ei < metricsEntries.length; ei++) {
+    if (new Date(metricsEntries[ei].date).getTime() > weekAgo) {
+      weeklyEntries.push(metricsEntries[ei]);
     }
+  }
 
-    var totalSeconds = 0;
-    for (var i = 0; i < weeklyEntries.length; i++) {
-      totalSeconds += weeklyEntries[i].duration;
+  var totalSeconds = 0;
+  for (ei = 0; ei < weeklyEntries.length; ei++) {
+    totalSeconds += weeklyEntries[ei].duration;
+  }
+
+  var summary = document.createElement('p');
+  summary.textContent = 'This week: ' + formatTime(totalSeconds);
+  content.appendChild(summary);
+
+  var actionCounts = {};
+  for (ei = 0; ei < weeklyEntries.length; ei++) {
+    var act = weeklyEntries[ei].action;
+    actionCounts[act] = (actionCounts[act] || 0) + weeklyEntries[ei].duration;
+  }
+
+  var list = document.createElement('ul');
+  list.style.listStyle = 'none';
+  list.style.padding = '0';
+  var keys = Object.keys(actionCounts);
+  var ki;
+  for (ki = 0; ki < keys.length; ki++) {
+    var li = document.createElement('li');
+    li.textContent = keys[ki] + ': ' + formatTime(actionCounts[keys[ki]]);
+    list.appendChild(li);
+  }
+  content.appendChild(list);
+
+  var exportBtn = createButton('Export CSV', 'exportCsvBtn');
+  content.appendChild(exportBtn);
+
+  registerClick('exportCsvBtn', function() {
+    var csv = 'Date,Action,Duration (seconds)\n';
+    for (ei = 0; ei < metricsEntries.length; ei++) {
+      csv += '"' + metricsEntries[ei].date + '",' + metricsEntries[ei].action + ',' + metricsEntries[ei].duration + '\n';
     }
-
-    var summary = document.createElement('p');
-    summary.textContent = 'This week: ' + formatTime(totalSeconds);
-    content.appendChild(summary);
-
-    var actionCounts = {};
-    for (var i = 0; i < weeklyEntries.length; i++) {
-      var act = weeklyEntries[i].action;
-      actionCounts[act] = (actionCounts[act] || 0) + weeklyEntries[i].duration;
-    }
-
-    var list = document.createElement('ul');
-    list.style.listStyle = 'none';
-    list.style.padding = '0';
-    var keys = Object.keys(actionCounts);
-    for (var ki = 0; ki < keys.length; ki++) {
-      var li = document.createElement('li');
-      li.textContent = keys[ki] + ': ' + formatTime(actionCounts[keys[ki]]);
-      list.appendChild(li);
-    }
-    content.appendChild(list);
-
-    var exportBtn = createButton('Export CSV', 'exportCsvBtn');
-    content.appendChild(exportBtn);
-
-    registerClick('exportCsvBtn', function() {
-      exportToCSV().then(function(csv) {
-        var blob = new Blob([csv], { type: 'text/csv' });
-        var url = URL.createObjectURL(blob);
-        var a = document.createElement('a');
-        a.href = url;
-        a.download = '8ras-export.csv';
-        a.click();
-        URL.revokeObjectURL(url);
-      });
-    });
+    var blob = new Blob([csv], { type: 'text/csv' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = '8ras-export.csv';
+    a.click();
+    URL.revokeObjectURL(url);
   });
 }
 
@@ -562,7 +352,8 @@ function registerNavigation() {
   var tabs = containerEl.querySelector('.tabs');
   if (!tabs) return;
   var buttons = tabs.querySelectorAll('button[data-view]');
-  for (var bi = 0; bi < buttons.length; bi++) {
+  var bi;
+  for (bi = 0; bi < buttons.length; bi++) {
     (function(btn) {
       registerClick(btn.dataset.view + 'Tab', function() {
         currentView = btn.dataset.view;
@@ -617,8 +408,6 @@ function init(appContainer) {
     styleTag.textContent = CSS_STYLES;
     document.head.appendChild(styleTag);
 
-    trySetupStorageSilently();
-
     render('setup');
   } catch (e) {
     console.error('Plugin init error:', e.message);
@@ -628,7 +417,7 @@ function init(appContainer) {
   }
 }
 
-// Auto-init when loaded as script tag (for UDT testing)
+// Auto-init when loaded as script tag
 if (typeof document !== 'undefined' && document.body) {
   init(document.body);
 }
