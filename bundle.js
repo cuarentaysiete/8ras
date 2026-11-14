@@ -25,7 +25,13 @@ var lastAction = null;
 var resolvedFolder = null; // cached folder reference
 
 // ─── UXP File System Helpers ──────────────────────────────────────
+// NOTE: UXP storage requires a real Photoshop session. In UDT,
+// these calls will fail. The panel degrades gracefully.
+
+var _uxpAvailable = false;
+
 async function getFileSystem() {
+  if (!_uxpAvailable) throw new Error('UXP storage unavailable');
   var uxp = require('uxp');
   var session = uxp.storage.session;
   return await session.requestFileSystem();
@@ -63,16 +69,17 @@ async function setupStorageFolder() {
       var f = await resolvedFolder.createFile(metricsFile);
       await f.write(JSON.stringify({ entries: [] }), { format: 'text' });
     }
+    _uxpAvailable = true;
     return true;
   } catch (e) {
-    console.error('Storage setup failed:', e.message);
+    console.warn('Storage setup failed (running in UDT?):', e.message);
     return false;
   }
 }
 
 async function readMetrics() {
   try {
-    if (!resolvedFolder) return { entries: [] };
+    if (!_uxpAvailable || !resolvedFolder) return { entries: [] };
     var file = await resolvedFolder.getFile(metricsFile);
     var content = await file.read({ format: 'text' });
     return JSON.parse(content);
@@ -83,27 +90,27 @@ async function readMetrics() {
 
 async function writeMetrics(metrics) {
   try {
-    if (!resolvedFolder) return;
+    if (!_uxpAvailable || !resolvedFolder) return;
     var file = await resolveFilePath(resolvedFolder, metricsFile);
     await file.write(JSON.stringify(metrics, null, 2), { format: 'text' });
   } catch (e) {
-    console.error('Write metrics failed:', e.message);
+    // Silently fail in UDT — data won't persist but panel works
   }
 }
 
 async function saveToken(token) {
   try {
-    if (!resolvedFolder) return;
+    if (!_uxpAvailable || !resolvedFolder) return;
     var file = await resolveFilePath(resolvedFolder, tokenFile);
     await file.write(token, { format: 'text' });
   } catch (e) {
-    console.error('Save token failed:', e.message);
+    // Silent fail
   }
 }
 
 async function restoreToken() {
   try {
-    if (!resolvedFolder) return null;
+    if (!_uxpAvailable || !resolvedFolder) return null;
     var file = await resolvedFolder.getFile(tokenFile);
     var content = await file.read({ format: 'text' });
     return content.trim();
@@ -124,7 +131,7 @@ async function exportToCSV() {
 // ─── Session Persistence ──────────────────────────────────────────
 async function persistSessionData(seconds) {
   try {
-    if (!resolvedFolder) return;
+    if (!_uxpAvailable || !resolvedFolder) return;
     var data = JSON.stringify({
       active: isActive,
       startTime: sessionStartTime,
@@ -134,13 +141,13 @@ async function persistSessionData(seconds) {
     var file = await resolveFilePath(resolvedFolder, sessionFile);
     await file.write(data, { format: 'text' });
   } catch (e) {
-    console.error('Persist session failed:', e.message);
+    // Silent fail in UDT
   }
 }
 
 async function restoreSession() {
   try {
-    if (!resolvedFolder) return false;
+    if (!_uxpAvailable || !resolvedFolder) return false;
     var file = await resolvedFolder.getFile(sessionFile);
     var content = await file.read({ format: 'text' });
     var data = JSON.parse(content);
@@ -559,7 +566,10 @@ async function init() {
     'li{padding:4px 0;border-bottom:1px solid #45475a}';
   document.head.appendChild(style);
 
-  await setupStorageFolder();
+  var storageOk = await setupStorageFolder();
+  if (!storageOk) {
+    console.warn('Running in UDT mode — data will not persist.');
+  }
   render('setup');
 }
 
