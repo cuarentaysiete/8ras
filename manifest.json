@@ -21,6 +21,6 @@
     }
   ],
   "icons": [
-    {"path": "public/icon.png", "size": 64}
+    {"path": "public/icon.png", "width": 64, "height": 64}
   ]
 }
