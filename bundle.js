@@ -77,6 +77,23 @@ async function setupStorageFolder() {
   }
 }
 
+// Non-blocking version: returns immediately, sets flag asynchronously
+async function trySetupStorageSilently() {
+  try {
+    var fileSystem = await getFileSystem();
+    resolvedFolder = await resolvePath(fileSystem, STORAGE_PATH);
+    try {
+      await resolvedFolder.getFile(metricsFile);
+    } catch (e) {
+      var f = await resolvedFolder.createFile(metricsFile);
+      await f.write(JSON.stringify({ entries: [] }), { format: 'text' });
+    }
+    _uxpAvailable = true;
+  } catch (e) {
+    // Do nothing — panel works without storage
+  }
+}
+
 async function readMetrics() {
   try {
     if (!_uxpAvailable || !resolvedFolder) return { entries: [] };
@@ -221,23 +238,27 @@ function addToMetrics(date, duration, action) {
 // ─── Photoshop Notifications ──────────────────────────────────────
 function startListening() {
   try {
-    var app = require('photoshop').app;
-    if (app && app.addEventListener) {
-      app.addEventListener('notification', onPhotoshopEvent);
+    var ps = require('photoshop');
+    if (ps && ps.app) {
+      if (typeof ps.app.addEventListener === 'function') {
+        ps.app.addEventListener('notification', onPhotoshopEvent);
+      } else {
+        console.warn('Photoshop app.addEventListener not available');
+      }
     }
   } catch (e) {
-    console.warn('Could not attach Photoshop listener:', e.message);
+    // Silently fail — tracking works without notifications
   }
 }
 
 function stopListening() {
   try {
-    var app = require('photoshop').app;
-    if (app && app.removeEventListener) {
-      app.removeEventListener('notification', onPhotoshopEvent);
+    var ps = require('photoshop');
+    if (ps && ps.app && typeof ps.app.removeEventListener === 'function') {
+      ps.app.removeEventListener('notification', onPhotoshopEvent);
     }
   } catch (e) {
-    console.warn('Could not detach Photoshop listener:', e.message);
+    // Silently fail
   }
 }
 
@@ -566,10 +587,9 @@ async function init() {
     'li{padding:4px 0;border-bottom:1px solid #45475a}';
   document.head.appendChild(style);
 
-  var storageOk = await setupStorageFolder();
-  if (!storageOk) {
-    console.warn('Running in UDT mode — data will not persist.');
-  }
+  // Fire-and-forget storage setup — never blocks UI render
+  trySetupStorageSilently();
+
   render('setup');
 }
 
