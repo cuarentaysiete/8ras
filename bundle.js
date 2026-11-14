@@ -12,7 +12,7 @@ var SUPPORTED_ACTIONS = [
 var metricsFile = 'metrics.json';
 var tokenFile = 'token.txt';
 var sessionFile = 'session.json';
-var currentView = 'setup'; // setup | timer | dashboard | settings
+var currentView = 'setup';
 var settings = { idleTimeout: IDLE_TIMEOUT };
 var clickHandlers = {};
 var containerEl = null;
@@ -26,7 +26,12 @@ var resolvedFolder = null;
 var _uxpAvailable = false;
 var psApp = null;
 
+// Try to get Photoshop app reference (may fail in UDT)
+try { psApp = require('photoshop').app; } catch(e) { psApp = null; }
+
 // ─── UXP File System Helpers ──────────────────────────────────────
+// All file operations wrapped in try/catch — never throw to caller
+
 async function getFileSystem() {
   var uxp = require('uxp');
   var session = uxp.storage.session;
@@ -84,7 +89,7 @@ async function trySetupStorageSilently() {
     }
     _uxpAvailable = true;
   } catch (e) {
-    // Do nothing — panel works without storage
+    // Do nothing
   }
 }
 
@@ -159,7 +164,7 @@ async function persistSessionData(seconds) {
 async function restoreSession() {
   try {
     if (!_uxpAvailable || !resolvedFolder) return false;
-    file = await resolvedFolder.getFile(sessionFile);
+    var file = await resolvedFolder.getFile(sessionFile);
     var content = await file.read({ format: 'text' });
     var data = JSON.parse(content);
     isActive = data.active;
@@ -230,14 +235,6 @@ function addToMetrics(date, duration, action) {
 }
 
 // ─── Photoshop Notifications ──────────────────────────────────────
-function initPhotoshopApp() {
-  try {
-    psApp = require('photoshop').app;
-  } catch (e) {
-    psApp = null;
-  }
-}
-
 function startListening() {
   try {
     if (psApp && typeof psApp.addEventListener === 'function') {
@@ -343,7 +340,6 @@ function renderSetupView() {
 function renderMainView() {
   var container = document.createElement('div');
 
-  // Tabs
   var tabs = document.createElement('div');
   tabs.className = 'tabs';
   ['Timer', 'Dashboard', 'Settings'].forEach(function(tab) {
@@ -354,7 +350,6 @@ function renderMainView() {
   });
   container.appendChild(tabs);
 
-  // Content area
   var content = document.createElement('div');
   content.id = 'mainContent';
   container.appendChild(content);
@@ -409,7 +404,6 @@ function renderTimerContent() {
     render();
   });
 
-  // Start interval update
   if (timerInterval) clearInterval(timerInterval);
   timerInterval = setInterval(function() {
     if (isActive) {
@@ -453,7 +447,6 @@ function renderDashboardView() {
     summary.textContent = 'This week: ' + formatTime(totalSeconds);
     content.appendChild(summary);
 
-    // Per-action breakdown
     var actionCounts = {};
     weeklyEntries.forEach(function(e) {
       actionCounts[e.action] = (actionCounts[e.action] || 0) + e.duration;
@@ -469,7 +462,6 @@ function renderDashboardView() {
     });
     content.appendChild(list);
 
-    // Export button
     var exportBtn = createButton('Export CSV', 'exportCsvBtn');
     content.appendChild(exportBtn);
 
@@ -573,24 +565,18 @@ function dispatchClick(event) {
   }
 }
 
-// ─── Public API (exported module) ─────────────────────────────────
+// ─── Initialization ───────────────────────────────────────────────
 function init(appContainer) {
   try {
     containerEl = appContainer;
     containerEl.addEventListener('click', dispatchClick.bind(containerEl));
 
-    // Apply styles once
     var styleTag = document.createElement('style');
     styleTag.textContent = CSS_STYLES;
     document.head.appendChild(styleTag);
 
-    // Initialize Photoshop app reference (non-blocking)
-    initPhotoshopApp();
-
-    // Fire-and-forget storage setup
     trySetupStorageSilently();
 
-    // Render immediately
     render('setup');
   } catch (e) {
     console.error('Plugin init error:', e.message);
@@ -600,7 +586,12 @@ function init(appContainer) {
   }
 }
 
-// Export for CommonJS modules (UXP)
+// Auto-init when loaded as script tag (for UDT testing)
+if (typeof document !== 'undefined' && document.body) {
+  init(document.body);
+}
+
+// Export for CommonJS modules (real Photoshop UXP)
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { init: init };
 }

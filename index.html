@@ -3,20 +3,6 @@
 <head><title>8RAS Time Tracker</title></head>
 <body>
   <div id="app"></div>
-  <script>
-    // Bridge: load the UXP module after DOM is ready
-    document.addEventListener('DOMContentLoaded', function() {
-      try {
-        var mod = require('./bundle');
-        if (mod && mod.init) {
-          mod.init(document.getElementById('app'));
-        } else {
-          document.body.innerHTML = '<p style="color:#f38;">Plugin init failed</p>';
-        }
-      } catch(e) {
-        document.body.innerHTML = '<p style="color:#f38;">Error loading plugin: ' + e.message + '</p>';
-      }
-    });
-  </script>
+  <script src="./bundle.js"></script>
 </body>
 </html>
