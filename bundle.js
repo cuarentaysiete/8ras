@@ -9,9 +9,9 @@ var SUPPORTED_ACTIONS = [
 ];
 
 // ─── State ────────────────────────────────────────────────────────
-var metricsFile = STORAGE_PATH + '/metrics.json';
-var tokenFile = STORAGE_PATH + '/token.txt';
-var sessionFile = STORAGE_PATH + '/session.json';
+var metricsFile = 'metrics.json';
+var tokenFile = 'token.txt';
+var sessionFile = 'session.json';
 var currentView = 'setup'; // setup | timer | dashboard | settings
 var settings = { idleTimeout: IDLE_TIMEOUT };
 var clickHandlers = {};
@@ -21,16 +21,47 @@ var timerInterval = null;
 var sessionStartTime = null;
 var isActive = false;
 var lastActionTime = null;
+var lastAction = null;
+var resolvedFolder = null; // cached folder reference
 
-// ─── File System Helpers ──────────────────────────────────────────
+// ─── UXP File System Helpers ──────────────────────────────────────
+async function getFileSystem() {
+  var uxp = require('uxp');
+  var session = uxp.storage.session;
+  return await session.requestFileSystem();
+}
+
+async function resolvePath(fileSystem, path) {
+  var parts = path.split('/').filter(function(p) { return p.length > 0; });
+  var current = fileSystem.root;
+  for (var i = 0; i < parts.length; i++) {
+    try {
+      current = await current.getFolder(parts[i]);
+    } catch (e) {
+      current = await current.createFolder(parts[i]);
+    }
+  }
+  return current;
+}
+
+async function resolveFilePath(fileSystem, filename) {
+  try {
+    return await resolvedFolder.getFile(filename);
+  } catch (e) {
+    return await resolvedFolder.createFile(filename);
+  }
+}
+
 async function setupStorageFolder() {
   try {
-    var fs = require('fs');
-    if (!fs.existsSync(STORAGE_PATH)) {
-      fs.mkdirSync(STORAGE_PATH, { recursive: true });
-    }
-    if (!fs.existsSync(metricsFile)) {
-      fs.writeFileSync(metricsFile, JSON.stringify({ entries: [] }), 'utf8');
+    var fileSystem = await getFileSystem();
+    resolvedFolder = await resolvePath(fileSystem, STORAGE_PATH);
+    // Ensure metrics file exists
+    try {
+      await resolvedFolder.getFile(metricsFile);
+    } catch (e) {
+      var f = await resolvedFolder.createFile(metricsFile);
+      await f.write(JSON.stringify({ entries: [] }), { format: 'text' });
     }
     return true;
   } catch (e) {
@@ -41,9 +72,10 @@ async function setupStorageFolder() {
 
 async function readMetrics() {
   try {
-    var fs = require('fs');
-    var data = fs.readFileSync(metricsFile, 'utf8');
-    return JSON.parse(data);
+    if (!resolvedFolder) return { entries: [] };
+    var file = await resolvedFolder.getFile(metricsFile);
+    var content = await file.read({ format: 'text' });
+    return JSON.parse(content);
   } catch (e) {
     return { entries: [] };
   }
@@ -51,8 +83,9 @@ async function readMetrics() {
 
 async function writeMetrics(metrics) {
   try {
-    var fs = require('fs');
-    fs.writeFileSync(metricsFile, JSON.stringify(metrics, null, 2), 'utf8');
+    if (!resolvedFolder) return;
+    var file = await resolveFilePath(resolvedFolder, metricsFile);
+    await file.write(JSON.stringify(metrics, null, 2), { format: 'text' });
   } catch (e) {
     console.error('Write metrics failed:', e.message);
   }
@@ -60,8 +93,9 @@ async function writeMetrics(metrics) {
 
 async function saveToken(token) {
   try {
-    var fs = require('fs');
-    fs.writeFileSync(tokenFile, token, 'utf8');
+    if (!resolvedFolder) return;
+    var file = await resolveFilePath(resolvedFolder, tokenFile);
+    await file.write(token, { format: 'text' });
   } catch (e) {
     console.error('Save token failed:', e.message);
   }
@@ -69,14 +103,13 @@ async function saveToken(token) {
 
 async function restoreToken() {
   try {
-    var fs = require('fs');
-    if (fs.existsSync(tokenFile)) {
-      return fs.readFileSync(tokenFile, 'utf8').trim();
-    }
+    if (!resolvedFolder) return null;
+    var file = await resolvedFolder.getFile(tokenFile);
+    var content = await file.read({ format: 'text' });
+    return content.trim();
   } catch (e) {
-    console.error('Restore token failed:', e.message);
+    return null;
   }
-  return null;
 }
 
 async function exportToCSV() {
@@ -91,14 +124,15 @@ async function exportToCSV() {
 // ─── Session Persistence ──────────────────────────────────────────
 async function persistSessionData(seconds) {
   try {
-    var fs = require('fs');
+    if (!resolvedFolder) return;
     var data = JSON.stringify({
       active: isActive,
       startTime: sessionStartTime,
       elapsed: seconds || 0,
-      lastAction: lastActionTime
+      lastAction: lastAction
     });
-    fs.writeFileSync(sessionFile, data, 'utf8');
+    var file = await resolveFilePath(resolvedFolder, sessionFile);
+    await file.write(data, { format: 'text' });
   } catch (e) {
     console.error('Persist session failed:', e.message);
   }
@@ -106,18 +140,18 @@ async function persistSessionData(seconds) {
 
 async function restoreSession() {
   try {
-    var fs = require('fs');
-    if (fs.existsSync(sessionFile)) {
-      var data = JSON.parse(fs.readFileSync(sessionFile, 'utf8'));
-      isActive = data.active;
-      sessionStartTime = data.startTime;
-      lastActionTime = data.lastAction;
-      return true;
-    }
+    if (!resolvedFolder) return false;
+    var file = await resolvedFolder.getFile(sessionFile);
+    var content = await file.read({ format: 'text' });
+    var data = JSON.parse(content);
+    isActive = data.active;
+    sessionStartTime = data.startTime;
+    lastActionTime = data.lastAction;
+    lastAction = data.lastAction;
+    return true;
   } catch (e) {
-    console.error('Restore session failed:', e.message);
+    return false;
   }
-  return false;
 }
 
 // ─── Tracking Engine ──────────────────────────────────────────────
@@ -134,6 +168,7 @@ function resetIdleTimer(now) {
 function startTracking(action) {
   if (!SUPPORTED_ACTIONS.includes(action)) return;
   isActive = true;
+  lastAction = action;
   if (!sessionStartTime) sessionStartTime = Date.now();
   resetIdleTimer();
   persistSessionData(getElapsed());
@@ -143,7 +178,7 @@ function pauseTracking() {
   if (!isActive) return;
   var duration = getElapsed();
   if (duration > 0) {
-    addToMetrics(lastActionTime, duration);
+    addToMetrics(lastActionTime, duration, lastAction || 'unknown');
   }
   isActive = false;
   sessionStartTime = null;
@@ -237,18 +272,22 @@ function renderSetupView() {
   var btnContainer = document.createElement('div');
   btnContainer.style.marginTop = '20px';
 
-  var folderBtn = createButton('Select Folder', 'selectFolderBtn');
-  btnContainer.appendChild(folderBtn);
+  var initBtn = createButton('Initialize Storage', 'initStorageBtn');
+  btnContainer.appendChild(initBtn);
 
   var startBtn = createButton('Start Tracking', 'startBtn');
   btnContainer.appendChild(startBtn);
 
   rootEl.appendChild(btnContainer);
 
-  registerClick('selectFolderBtn', function() {
+  registerClick('initStorageBtn', function() {
     setupStorageFolder().then(function(ok) {
       document.getElementById('statusText').textContent =
-        ok ? 'Storage ready!' : 'Storage setup failed.';
+        ok ? 'Storage ready! Click Start Tracking.' : 'Storage setup failed: ' + (window._lastError || '');
+      window._lastError = '';
+    }).catch(function(e) {
+      document.getElementById('statusText').textContent = 'Storage setup failed: ' + e.message;
+      window._lastError = e.message;
     });
   });
 
@@ -506,7 +545,7 @@ async function init() {
   rootEl = document.body;
   rootEl.addEventListener('click', dispatchClick.bind(rootEl));
 
-  // Apply Catppuccin Mocha theme styles
+  // Catppuccin Mocha theme styles
   var style = document.createElement('style');
   style.textContent =
     'body{font-family:sans-serif;background:#1e1e2e;color:#cdd6f4;padding:16px;margin:0}' +
