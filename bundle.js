@@ -1,7 +1,7 @@
-/* 8RAS Time Tracker — Pure Vanilla JS for Adobe Photoshop UXP */
+/* 8RAS Time Tracker — Adobe Photoshop UXP Plugin (Vanilla JS) */
 
 // ─── Configuration ────────────────────────────────────────────────
-var STORAGE_PATH = '/Users/Shared/8ras-data'; // Edit this before loading in PS
+var STORAGE_PATH = '/Users/Shared/8ras-data'; // Edit before loading in PS
 var IDLE_TIMEOUT = 60; // seconds of inactivity before pause
 var SUPPORTED_ACTIONS = [
   'brush', 'penTool', 'move', 'typeCreateOrChange',
@@ -15,23 +15,19 @@ var sessionFile = 'session.json';
 var currentView = 'setup'; // setup | timer | dashboard | settings
 var settings = { idleTimeout: IDLE_TIMEOUT };
 var clickHandlers = {};
-var rootEl = null;
+var containerEl = null;
 var idleTimer = null;
 var timerInterval = null;
 var sessionStartTime = null;
 var isActive = false;
 var lastActionTime = null;
 var lastAction = null;
-var resolvedFolder = null; // cached folder reference
+var resolvedFolder = null;
+var _uxpAvailable = false;
+var psApp = null;
 
 // ─── UXP File System Helpers ──────────────────────────────────────
-// NOTE: UXP storage requires a real Photoshop session. In UDT,
-// these calls will fail. The panel degrades gracefully.
-
-var _uxpAvailable = false;
-
 async function getFileSystem() {
-  if (!_uxpAvailable) throw new Error('UXP storage unavailable');
   var uxp = require('uxp');
   var session = uxp.storage.session;
   return await session.requestFileSystem();
@@ -50,7 +46,7 @@ async function resolvePath(fileSystem, path) {
   return current;
 }
 
-async function resolveFilePath(fileSystem, filename) {
+async function resolveFilePath(filename) {
   try {
     return await resolvedFolder.getFile(filename);
   } catch (e) {
@@ -62,7 +58,6 @@ async function setupStorageFolder() {
   try {
     var fileSystem = await getFileSystem();
     resolvedFolder = await resolvePath(fileSystem, STORAGE_PATH);
-    // Ensure metrics file exists
     try {
       await resolvedFolder.getFile(metricsFile);
     } catch (e) {
@@ -72,12 +67,11 @@ async function setupStorageFolder() {
     _uxpAvailable = true;
     return true;
   } catch (e) {
-    console.warn('Storage setup failed (running in UDT?):', e.message);
+    console.warn('Storage setup failed:', e.message);
     return false;
   }
 }
 
-// Non-blocking version: returns immediately, sets flag asynchronously
 async function trySetupStorageSilently() {
   try {
     var fileSystem = await getFileSystem();
@@ -108,17 +102,17 @@ async function readMetrics() {
 async function writeMetrics(metrics) {
   try {
     if (!_uxpAvailable || !resolvedFolder) return;
-    var file = await resolveFilePath(resolvedFolder, metricsFile);
+    var file = await resolveFilePath(metricsFile);
     await file.write(JSON.stringify(metrics, null, 2), { format: 'text' });
   } catch (e) {
-    // Silently fail in UDT — data won't persist but panel works
+    // Silent fail
   }
 }
 
 async function saveToken(token) {
   try {
     if (!_uxpAvailable || !resolvedFolder) return;
-    var file = await resolveFilePath(resolvedFolder, tokenFile);
+    var file = await resolveFilePath(tokenFile);
     await file.write(token, { format: 'text' });
   } catch (e) {
     // Silent fail
@@ -155,17 +149,19 @@ async function persistSessionData(seconds) {
       elapsed: seconds || 0,
       lastAction: lastAction
     });
-    var file = await resolveFilePath(resolvedFolder, sessionFile);
+    var file = await resolveFilePath(sessionFile);
     await file.write(data, { format: 'text' });
   } catch (e) {
-    // Silent fail in UDT
+    // Silent fail
   }
 }
 
 async function restoreSession() {
   try {
     if (!_uxpAvailable || !resolvedFolder) return false;
-    var file = await resolvedFolder.getFile(sessionFile);
+    var file = await resolvedFolder.getSession ? resolvedFolder : null;
+    if (!file) return false;
+    file = await resolvedFolder.getFile(sessionFile);
     var content = await file.read({ format: 'text' });
     var data = JSON.parse(content);
     isActive = data.active;
@@ -236,26 +232,28 @@ function addToMetrics(date, duration, action) {
 }
 
 // ─── Photoshop Notifications ──────────────────────────────────────
+function initPhotoshopApp() {
+  try {
+    psApp = require('photoshop').app;
+  } catch (e) {
+    psApp = null;
+  }
+}
+
 function startListening() {
   try {
-    var ps = require('photoshop');
-    if (ps && ps.app) {
-      if (typeof ps.app.addEventListener === 'function') {
-        ps.app.addEventListener('notification', onPhotoshopEvent);
-      } else {
-        console.warn('Photoshop app.addEventListener not available');
-      }
+    if (psApp && typeof psApp.addEventListener === 'function') {
+      psApp.addEventListener('notification', onPhotoshopEvent);
     }
   } catch (e) {
-    // Silently fail — tracking works without notifications
+    // Silently fail
   }
 }
 
 function stopListening() {
   try {
-    var ps = require('photoshop');
-    if (ps && ps.app && typeof ps.app.removeEventListener === 'function') {
-      ps.app.removeEventListener('notification', onPhotoshopEvent);
+    if (psApp && typeof psApp.removeEventListener === 'function') {
+      psApp.removeEventListener('notification', onPhotoshopEvent);
     }
   } catch (e) {
     // Silently fail
@@ -274,10 +272,21 @@ function onPhotoshopEvent(notification) {
 }
 
 // ─── UI Rendering ─────────────────────────────────────────────────
+var CSS_STYLES =
+  'body{font-family:sans-serif;background:#1e1e2e;color:#cdd6f4;padding:16px;margin:0}' +
+  'button:hover{opacity:0.85}' +
+  'button:active{transform:scale(0.98)}' +
+  '.tabs{display:flex;gap:4px;margin-bottom:16px}' +
+  '.tabs button{flex:1;padding:8px;border:none;border-radius:4px;' +
+  'background:#45475a;color:#cdd6f4;cursor:pointer;font-size:13px}' +
+  '.tabs button:hover{background:#585b70}' +
+  'ul{padding-left:0}' +
+  'li{padding:4px 0;border-bottom:1px solid #45475a}';
+
 function render(view) {
   currentView = view || currentView;
-  if (!rootEl) return;
-  rootEl.innerHTML = '';
+  if (!containerEl) return;
+  containerEl.innerHTML = '';
   switch (currentView) {
     case 'setup': renderSetupView(); break;
     case 'timer': renderMainView(); break;
@@ -290,12 +299,12 @@ function render(view) {
 function renderSetupView() {
   var header = document.createElement('div');
   header.innerHTML = '<h2>Setup</h2>';
-  rootEl.appendChild(header);
+  containerEl.appendChild(header);
 
   var status = document.createElement('p');
   status.id = 'statusText';
   status.textContent = 'Configure storage and start tracking.';
-  rootEl.appendChild(status);
+  containerEl.appendChild(status);
 
   var btnContainer = document.createElement('div');
   btnContainer.style.marginTop = '20px';
@@ -306,16 +315,14 @@ function renderSetupView() {
   var startBtn = createButton('Start Tracking', 'startBtn');
   btnContainer.appendChild(startBtn);
 
-  rootEl.appendChild(btnContainer);
+  containerEl.appendChild(btnContainer);
 
   registerClick('initStorageBtn', function() {
     setupStorageFolder().then(function(ok) {
       document.getElementById('statusText').textContent =
-        ok ? 'Storage ready! Click Start Tracking.' : 'Storage setup failed: ' + (window._lastError || '');
-      window._lastError = '';
+        ok ? 'Storage ready! Click Start Tracking.' : 'Storage setup failed.';
     }).catch(function(e) {
-      document.getElementById('statusText').textContent = 'Storage setup failed: ' + e.message;
-      window._lastError = e.message;
+      document.getElementById('statusText').textContent = 'Storage error: ' + e.message;
     });
   });
 
@@ -354,7 +361,7 @@ function renderMainView() {
   content.id = 'mainContent';
   container.appendChild(content);
 
-  rootEl.appendChild(container);
+  containerEl.appendChild(container);
   renderTimerContent();
 }
 
@@ -522,7 +529,7 @@ function renderSettingsView() {
 }
 
 function registerNavigation() {
-  var tabs = rootEl.querySelector('.tabs');
+  var tabs = containerEl.querySelector('.tabs');
   if (!tabs) return;
   var buttons = tabs.querySelectorAll('button[data-view]');
   buttons.forEach(function(btn) {
@@ -559,7 +566,7 @@ function registerClick(id, handler) {
 
 function dispatchClick(event) {
   var target = event.target;
-  while (target && target !== rootEl) {
+  while (target && target !== containerEl) {
     if (clickHandlers[target.id]) {
       clickHandlers[target.id](event);
       return;
@@ -568,34 +575,34 @@ function dispatchClick(event) {
   }
 }
 
-// ─── Initialization ───────────────────────────────────────────────
-async function init() {
-  rootEl = document.body;
-  rootEl.addEventListener('click', dispatchClick.bind(rootEl));
+// ─── Public API (exported module) ─────────────────────────────────
+function init(appContainer) {
+  try {
+    containerEl = appContainer;
+    containerEl.addEventListener('click', dispatchClick.bind(containerEl));
 
-  // Catppuccin Mocha theme styles
-  var style = document.createElement('style');
-  style.textContent =
-    'body{font-family:sans-serif;background:#1e1e2e;color:#cdd6f4;padding:16px;margin:0}' +
-    'button:hover{opacity:0.85}' +
-    'button:active{transform:scale(0.98)}' +
-    '.tabs{display:flex;gap:4px;margin-bottom:16px}' +
-    '.tabs button{flex:1;padding:8px;border:none;border-radius:4px;' +
-    'background:#45475a;color:#cdd6f4;cursor:pointer;font-size:13px}' +
-    '.tabs button:hover{background:#585b70}' +
-    'ul{padding-left:0}' +
-    'li{padding:4px 0;border-bottom:1px solid #45475a}';
-  document.head.appendChild(style);
+    // Apply styles once
+    var styleTag = document.createElement('style');
+    styleTag.textContent = CSS_STYLES;
+    document.head.appendChild(styleTag);
 
-  // Fire-and-forget storage setup — never blocks UI render
-  trySetupStorageSilently();
+    // Initialize Photoshop app reference (non-blocking)
+    initPhotoshopApp();
 
-  render('setup');
+    // Fire-and-forget storage setup
+    trySetupStorageSilently();
+
+    // Render immediately
+    render('setup');
+  } catch (e) {
+    console.error('Plugin init error:', e.message);
+    if (appContainer) {
+      appContainer.innerHTML = '<p style="color:#f38;">Error: ' + e.message + '</p>';
+    }
+  }
 }
 
-// Boot
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', init);
-} else {
-  init();
+// Export for CommonJS modules (UXP)
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { init: init };
 }
