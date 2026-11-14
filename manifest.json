@@ -18,5 +18,6 @@
       "label": {"default": "8RAS"},
       "path": "./index.html"
     }
-  ]
+  ],
+  "unhandledRejection": "suppress"
 }
