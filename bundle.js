@@ -32,149 +32,193 @@ try { psApp = require('photoshop').app; } catch(e) { psApp = null; }
 // ─── UXP File System Helpers ──────────────────────────────────────
 // All file operations wrapped in try/catch — never throw to caller
 
-async function getFileSystem() {
+function padStart(str, len, ch) {
+  str = String(str);
+  while (str.length < len) str = ch + str;
+  return str;
+}
+
+function padStartNum(num, len) {
+  return padStart(String(num), len, '0');
+}
+
+function arrayIncludes(arr, val) {
+  for (var i = 0; i < arr.length; i++) {
+    if (arr[i] === val) return true;
+  }
+  return false;
+}
+
+function getFileSystem() {
   var uxp = require('uxp');
   var session = uxp.storage.session;
-  return await session.requestFileSystem();
+  return session.requestFileSystem();
 }
 
-async function resolvePath(fileSystem, path) {
-  var parts = path.split('/').filter(function(p) { return p.length > 0; });
-  var current = fileSystem.root;
+function resolvePath(fileSystem, path) {
+  var parts = path.split('/');
+  var filtered = [];
   for (var i = 0; i < parts.length; i++) {
-    try {
-      current = await current.getFolder(parts[i]);
-    } catch (e) {
-      current = await current.createFolder(parts[i]);
-    }
+    if (parts[i].length > 0) filtered.push(parts[i]);
   }
-  return current;
+  var current = fileSystem.root;
+  for (var i = 0; i < filtered.length; i++) {
+    (function(idx) {
+      current.getFolder(filtered[idx]).then(function(folder) {
+        current = folder;
+      }).catch(function() {
+        current.createFolder(filtered[idx]).then(function(folder) {
+          current = folder;
+        });
+      });
+    })(i);
+  }
+  // Return a promise-based result
+  return new Promise(function(resolve, reject) {
+    (function recurse(idx, callback) {
+      if (idx >= filtered.length) {
+        callback(null, current);
+        return;
+      }
+      current.getFolder(filtered[idx]).then(function(folder) {
+        current = folder;
+        recurse(idx + 1, callback);
+      }).catch(function() {
+        current.createFolder(filtered[idx]).then(function(folder) {
+          current = folder;
+          recurse(idx + 1, callback);
+        });
+      });
+    })(0, function(err, folder) {
+      if (err) reject(err);
+      else resolve(folder);
+    });
+  });
 }
 
-async function resolveFilePath(filename) {
-  try {
-    return await resolvedFolder.getFile(filename);
-  } catch (e) {
-    return await resolvedFolder.createFile(filename);
-  }
+function resolveFilePath(filename) {
+  return resolvedFolder.getFile(filename).catch(function() {
+    return resolvedFolder.createFile(filename);
+  });
 }
 
-async function setupStorageFolder() {
-  try {
-    var fileSystem = await getFileSystem();
-    resolvedFolder = await resolvePath(fileSystem, STORAGE_PATH);
-    try {
-      await resolvedFolder.getFile(metricsFile);
-    } catch (e) {
-      var f = await resolvedFolder.createFile(metricsFile);
-      await f.write(JSON.stringify({ entries: [] }), { format: 'text' });
-    }
-    _uxpAvailable = true;
-    return true;
-  } catch (e) {
+function setupStorageFolder() {
+  return getFileSystem().then(function(fileSystem) {
+    return resolvePath(fileSystem, STORAGE_PATH).then(function(folder) {
+      resolvedFolder = folder;
+      return folder.getFile(metricsFile).catch(function() {
+        return folder.createFile(metricsFile).then(function(f) {
+          return f.write(JSON.stringify({ entries: [] }), { format: 'text' });
+        });
+      }).then(function() {
+        _uxpAvailable = true;
+        return true;
+      });
+    });
+  }).catch(function(e) {
     console.warn('Storage setup failed:', e.message);
     return false;
-  }
-}
-
-async function trySetupStorageSilently() {
-  try {
-    var fileSystem = await getFileSystem();
-    resolvedFolder = await resolvePath(fileSystem, STORAGE_PATH);
-    try {
-      await resolvedFolder.getFile(metricsFile);
-    } catch (e) {
-      var f = await resolvedFolder.createFile(metricsFile);
-      await f.write(JSON.stringify({ entries: [] }), { format: 'text' });
-    }
-    _uxpAvailable = true;
-  } catch (e) {
-    // Do nothing
-  }
-}
-
-async function readMetrics() {
-  try {
-    if (!_uxpAvailable || !resolvedFolder) return { entries: [] };
-    var file = await resolvedFolder.getFile(metricsFile);
-    var content = await file.read({ format: 'text' });
-    return JSON.parse(content);
-  } catch (e) {
-    return { entries: [] };
-  }
-}
-
-async function writeMetrics(metrics) {
-  try {
-    if (!_uxpAvailable || !resolvedFolder) return;
-    var file = await resolveFilePath(metricsFile);
-    await file.write(JSON.stringify(metrics, null, 2), { format: 'text' });
-  } catch (e) {
-    // Silent fail
-  }
-}
-
-async function saveToken(token) {
-  try {
-    if (!_uxpAvailable || !resolvedFolder) return;
-    var file = await resolveFilePath(tokenFile);
-    await file.write(token, { format: 'text' });
-  } catch (e) {
-    // Silent fail
-  }
-}
-
-async function restoreToken() {
-  try {
-    if (!_uxpAvailable || !resolvedFolder) return null;
-    var file = await resolvedFolder.getFile(tokenFile);
-    var content = await file.read({ format: 'text' });
-    return content.trim();
-  } catch (e) {
-    return null;
-  }
-}
-
-async function exportToCSV() {
-  var metrics = await readMetrics();
-  var csv = 'Date,Action,Duration (seconds)\n';
-  metrics.entries.forEach(function(entry) {
-    csv += '"' + entry.date + '",' + entry.action + ',' + entry.duration + '\n';
   });
-  return csv;
+}
+
+function trySetupStorageSilently() {
+  getFileSystem().then(function(fileSystem) {
+    return resolvePath(fileSystem, STORAGE_PATH).then(function(folder) {
+      resolvedFolder = folder;
+      return folder.getFile(metricsFile).catch(function() {
+        return folder.createFile(metricsFile).then(function(f) {
+          return f.write(JSON.stringify({ entries: [] }), { format: 'text' });
+        });
+      }).then(function() {
+        _uxpAvailable = true;
+      });
+    }).catch(function() {});
+  }).catch(function() {});
+}
+
+function readMetrics() {
+  if (!_uxpAvailable || !resolvedFolder) {
+    return Promise.resolve({ entries: [] });
+  }
+  return resolvedFolder.getFile(metricsFile).then(function(file) {
+    return file.read({ format: 'text' });
+  }).then(function(content) {
+    return JSON.parse(content);
+  }).catch(function() {
+    return { entries: [] };
+  });
+}
+
+function writeMetrics(metrics) {
+  if (!_uxpAvailable || !resolvedFolder) return Promise.resolve();
+  return resolveFilePath(metricsFile).then(function(file) {
+    return file.write(JSON.stringify(metrics, null, 2), { format: 'text' });
+  }).catch(function() {
+    return Promise.resolve();
+  });
+}
+
+function saveToken(token) {
+  if (!_uxpAvailable || !resolvedFolder) return Promise.resolve();
+  return resolveFilePath(tokenFile).then(function(file) {
+    return file.write(token, { format: 'text' });
+  }).catch(function() {
+    return Promise.resolve();
+  });
+}
+
+function restoreToken() {
+  if (!_uxpAvailable || !resolvedFolder) return Promise.resolve(null);
+  return resolvedFolder.getFile(tokenFile).then(function(file) {
+    return file.read({ format: 'text' });
+  }).then(function(content) {
+    return content.trim();
+  }).catch(function() {
+    return Promise.resolve(null);
+  });
+}
+
+function exportToCSV() {
+  return readMetrics().then(function(metrics) {
+    var csv = 'Date,Action,Duration (seconds)\n';
+    for (var i = 0; i < metrics.entries.length; i++) {
+      csv += '"' + metrics.entries[i].date + '",' + metrics.entries[i].action + ',' + metrics.entries[i].duration + '\n';
+    }
+    return csv;
+  });
 }
 
 // ─── Session Persistence ──────────────────────────────────────────
-async function persistSessionData(seconds) {
-  try {
-    if (!_uxpAvailable || !resolvedFolder) return;
-    var data = JSON.stringify({
-      active: isActive,
-      startTime: sessionStartTime,
-      elapsed: seconds || 0,
-      lastAction: lastAction
-    });
-    var file = await resolveFilePath(sessionFile);
-    await file.write(data, { format: 'text' });
-  } catch (e) {
-    // Silent fail
-  }
+function persistSessionData(seconds) {
+  if (!_uxpAvailable || !resolvedFolder) return Promise.resolve();
+  var data = JSON.stringify({
+    active: isActive,
+    startTime: sessionStartTime,
+    elapsed: seconds || 0,
+    lastAction: lastAction
+  });
+  return resolveFilePath(sessionFile).then(function(file) {
+    return file.write(data, { format: 'text' });
+  }).catch(function() {
+    return Promise.resolve();
+  });
 }
 
-async function restoreSession() {
-  try {
-    if (!_uxpAvailable || !resolvedFolder) return false;
-    var file = await resolvedFolder.getFile(sessionFile);
-    var content = await file.read({ format: 'text' });
+function restoreSession() {
+  if (!_uxpAvailable || !resolvedFolder) return Promise.resolve(false);
+  return resolvedFolder.getSession ? Promise.resolve(false) : Promise.resolve(false);
+  return resolvedFolder.getFile(sessionFile).then(function(file) {
+    return file.read({ format: 'text' });
+  }).then(function(content) {
     var data = JSON.parse(content);
     isActive = data.active;
     sessionStartTime = data.startTime;
     lastActionTime = data.lastAction;
     lastAction = data.lastAction;
     return true;
-  } catch (e) {
+  }).catch(function() {
     return false;
-  }
+  });
 }
 
 // ─── Tracking Engine ──────────────────────────────────────────────
@@ -189,7 +233,7 @@ function resetIdleTimer(now) {
 }
 
 function startTracking(action) {
-  if (!SUPPORTED_ACTIONS.includes(action)) return;
+  if (!arrayIncludes(SUPPORTED_ACTIONS, action)) return;
   isActive = true;
   lastAction = action;
   if (!sessionStartTime) sessionStartTime = Date.now();
@@ -218,9 +262,7 @@ function formatTime(totalSeconds) {
   var h = Math.floor(totalSeconds / 3600);
   var m = Math.floor((totalSeconds % 3600) / 60);
   var s = totalSeconds % 60;
-  return (h > 0 ? h + ':' : '') +
-    String(m).padStart(h > 0 ? 2 : 1, '0') + ':' +
-    String(s).padStart(2, '0');
+  return (h > 0 ? h + ':' : '') + padStartNum(m, h > 0 ? 2 : 1) + ':' + padStartNum(s, 2);
 }
 
 function addToMetrics(date, duration, action) {
@@ -258,7 +300,7 @@ function stopListening() {
 function onPhotoshopEvent(notification) {
   if (!notification || !notification.commandId) return;
   var cmd = notification.commandId;
-  if (SUPPORTED_ACTIONS.includes(cmd)) {
+  if (arrayIncludes(SUPPORTED_ACTIONS, cmd)) {
     startTracking(cmd);
     if (currentView === 'timer') {
       updateTimerDisplay();
@@ -342,12 +384,15 @@ function renderMainView() {
 
   var tabs = document.createElement('div');
   tabs.className = 'tabs';
-  ['Timer', 'Dashboard', 'Settings'].forEach(function(tab) {
-    var btn = document.createElement('button');
-    btn.textContent = tab;
-    btn.dataset.view = tab.toLowerCase();
-    tabs.appendChild(btn);
-  });
+  var tabNames = ['Timer', 'Dashboard', 'Settings'];
+  for (var ti = 0; ti < tabNames.length; ti++) {
+    (function(tabName) {
+      var btn = document.createElement('button');
+      btn.textContent = tabName;
+      btn.dataset.view = tabName.toLowerCase();
+      tabs.appendChild(btn);
+    })(tabNames[ti]);
+  }
   container.appendChild(tabs);
 
   var content = document.createElement('div');
@@ -435,31 +480,37 @@ function renderDashboardView() {
 
   readMetrics().then(function(metrics) {
     var weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    var weeklyEntries = metrics.entries.filter(function(e) {
-      return new Date(e.date).getTime() > weekAgo;
-    });
+    var weeklyEntries = [];
+    for (var i = 0; i < metrics.entries.length; i++) {
+      if (new Date(metrics.entries[i].date).getTime() > weekAgo) {
+        weeklyEntries.push(metrics.entries[i]);
+      }
+    }
 
-    var totalSeconds = weeklyEntries.reduce(function(sum, e) {
-      return sum + e.duration;
-    }, 0);
+    var totalSeconds = 0;
+    for (var i = 0; i < weeklyEntries.length; i++) {
+      totalSeconds += weeklyEntries[i].duration;
+    }
 
     var summary = document.createElement('p');
     summary.textContent = 'This week: ' + formatTime(totalSeconds);
     content.appendChild(summary);
 
     var actionCounts = {};
-    weeklyEntries.forEach(function(e) {
-      actionCounts[e.action] = (actionCounts[e.action] || 0) + e.duration;
-    });
+    for (var i = 0; i < weeklyEntries.length; i++) {
+      var act = weeklyEntries[i].action;
+      actionCounts[act] = (actionCounts[act] || 0) + weeklyEntries[i].duration;
+    }
 
     var list = document.createElement('ul');
     list.style.listStyle = 'none';
     list.style.padding = '0';
-    Object.keys(actionCounts).forEach(function(action) {
+    var keys = Object.keys(actionCounts);
+    for (var ki = 0; ki < keys.length; ki++) {
       var li = document.createElement('li');
-      li.textContent = action + ': ' + formatTime(actionCounts[action]);
+      li.textContent = keys[ki] + ': ' + formatTime(actionCounts[keys[ki]]);
       list.appendChild(li);
-    });
+    }
     content.appendChild(list);
 
     var exportBtn = createButton('Export CSV', 'exportCsvBtn');
@@ -522,14 +573,16 @@ function registerNavigation() {
   var tabs = containerEl.querySelector('.tabs');
   if (!tabs) return;
   var buttons = tabs.querySelectorAll('button[data-view]');
-  buttons.forEach(function(btn) {
-    registerClick(btn.dataset.view + 'Tab', function() {
-      currentView = btn.dataset.view;
-      if (timerInterval) clearInterval(timerInterval);
-      timerInterval = null;
-      render();
-    });
-  });
+  for (var bi = 0; bi < buttons.length; bi++) {
+    (function(btn) {
+      registerClick(btn.dataset.view + 'Tab', function() {
+        currentView = btn.dataset.view;
+        if (timerInterval) clearInterval(timerInterval);
+        timerInterval = null;
+        render();
+      });
+    })(buttons[bi]);
+  }
 }
 
 // ─── Event Delegation ─────────────────────────────────────────────
