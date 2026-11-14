@@ -1,24 +1,23 @@
 {
-  "$schema": "https://json.schemastore.org/uxp-webview-plugin-manifest.schema.json",
   "id": "com.cuarentaysiete.eight-ras.tracker",
   "name": "8RAS Time Tracker",
   "version": "1.0.0",
   "main": "index.html",
-  "uiHost": {
-    "path": "index.html",
-    "width": 320,
-    "height": 500,
-    "minimumWidth": 280,
-    "minimumHeight": 400
-  },
   "host": {
     "app": "PS",
-    "minVersion": "24.0.0"
+    "minVersion": "23.0.0"
   },
   "permissions": {
     "localFileSystem": "full"
   },
-  "icons": [
-    {"src": "public/icon.png", "width": 64, "height": 64}
+  "entrypoints": [
+    {
+      "type": "panel",
+      "id": "main-panel",
+      "label": {"default": "8RAS"},
+      "path": "./index.html",
+      "minimumSize": {"width": 280, "height": 400},
+      "preferredDockedSize": {"width": 320, "height": 500}
+    }
   ]
 }
