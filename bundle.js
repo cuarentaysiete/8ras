@@ -522,31 +522,39 @@ function dispatchClick(event) {
 
 // ─── Initialization ───────────────────────────────────────────────
 function init() {
-  rootEl = document.body;
-  rootEl.addEventListener('click', dispatchClick.bind(rootEl));
+  try {
+    rootEl = document.body;
+    if (!rootEl) return;
+    rootEl.addEventListener('click', dispatchClick.bind(rootEl));
 
-  // Apply Catppuccin Mocha theme styles
-  var style = document.createElement('style');
-  style.textContent =
-    'body{font-family:sans-serif;background:#1e1e2e;color:#cdd6f4;padding:16px;margin:0}' +
-    'button:hover{opacity:0.85}' +
-    'button:active{transform:scale(0.98)}' +
-    '.tabs{display:flex;gap:4px;margin-bottom:16px}' +
-    '.tabs button{flex:1;padding:8px;border:none;border-radius:4px;' +
-    'background:#45475a;color:#cdd6f4;cursor:pointer;font-size:13px}' +
-    '.tabs button:hover{background:#585b70}' +
-    'ul{padding-left:0}' +
-    'li{padding:4px 0;border-bottom:1px solid #45475a}';
-  document.head.appendChild(style);
+    // Apply Catppuccin Mocha theme styles
+    var style = document.createElement('style');
+    style.textContent =
+      'body{font-family:sans-serif;background:#1e1e2e;color:#cdd6f4;padding:16px;margin:0}' +
+      'button:hover{opacity:0.85}' +
+      'button:active{transform:scale(0.98)}' +
+      '.tabs{display:flex;gap:4px;margin-bottom:16px}' +
+      '.tabs button{flex:1;padding:8px;border:none;border-radius:4px;' +
+      'background:#45475a;color:#cdd6f4;cursor:pointer;font-size:13px}' +
+      '.tabs button:hover{background:#585b70}' +
+      'ul{padding-left:0}' +
+      'li{padding:4px 0;border-bottom:1px solid #45475a}';
+    document.head.appendChild(style);
 
-  // Fire-and-forget storage (never blocks UI)
-  setupStorageFolder().then(function(ok) {
-    console.log('[8RAS] Storage initialized:', ok);
-  }).catch(function(e) {
-    console.warn('[8RAS] Storage unavailable (UDT mode):', e.message);
-  });
+    // Fire-and-forget storage (never blocks UI)
+    setupStorageFolder().then(function(ok) {
+      console.log('[8RAS] Storage initialized:', ok);
+    }).catch(function(e) {
+      console.warn('[8RAS] Storage unavailable (UDT mode):', e.message);
+    });
 
-  render('setup');
+    render('setup');
+  } catch (e) {
+    console.error('[8RAS] CRITICAL ERROR in init():', e.message);
+    if (rootEl) {
+      rootEl.innerHTML = '<p style="color:#f38;">Error: ' + e.message + '</p>';
+    }
+  }
 }
 
 // Boot
