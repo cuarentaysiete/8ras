@@ -241,7 +241,11 @@
   }
   function init(appContainer) {
     try {
-      containerEl = appContainer;
+      if (!appContainer && document.documentElement) {
+        containerEl = document.documentElement;
+      } else {
+        containerEl = appContainer;
+      }
       if (!containerEl) return;
       containerEl.addEventListener('click', dispatchClick.bind(containerEl));
       var style = document.createElement('style');
