@@ -1,0 +1,105 @@
+/* ═══════════ 8ras Time Tracker v2.1 — panel theme ═══════════ */
+* { margin:0; padding:0; box-sizing:border-box }
+html, body { width:100%; height:100%; overflow:hidden }
+body {
+  background:#14151f; color:#e8e8ec;
+  font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size:11px;
+}
+#app { height:100%; overflow-y:auto; padding:8px; display:flex; flex-direction:column; gap:8px }
+
+.card { background:#1c1e2e; border:1px solid rgba(255,255,255,.07); border-radius:6px; padding:10px }
+.row { display:flex; align-items:center; gap:6px }
+
+/* header */
+.header { padding-bottom:6px }
+.brand { flex:1; display:flex; align-items:center; font-size:11px; font-weight:700; letter-spacing:.2px; color:#c3c7de }
+.vtag { font-size:9px; color:#5d617a; font-weight:400; font-family:Menlo,Consolas,monospace; letter-spacing:0; margin-left:6px }
+.iconbtn {
+  min-width:26px; height:18px; padding:0 6px;
+  background:none; border:1px solid rgba(255,255,255,.12); border-radius:4px;
+  color:#8a8fa3; font-size:8px; font-weight:700; letter-spacing:.5px; line-height:16px; cursor:pointer;
+}
+.iconbtn:hover { background:#2a2d45; color:#fff }
+
+/* timer card */
+.timer .time {
+  font-family:"SF Mono", Menlo, Consolas, monospace;
+  font-size:26px; font-weight:300; letter-spacing:1px; text-align:center; margin-top:2px;
+  font-variant-numeric:tabular-nums;
+}
+.timer.on .time { color:#7ee2a8 }
+.timer.off .time { color:#8a8fa3 }
+.doc { text-align:center; font-size:10px; color:#8a8fa3; margin-top:4px; line-height:1.4 }
+.doc b { color:#e8e8ec; font-weight:600; word-break:normal; overflow-wrap:anywhere }
+.status { text-align:center; font-size:9px; margin-top:5px; color:#2ecc71; letter-spacing:.3px }
+.timer.off .status { color:#8a8fa3 }
+
+/* tabs */
+.tabs { display:flex; gap:4px }
+.tab {
+  flex:1; padding:5px 0; text-align:center; font-size:10px; font-weight:600;
+  background:#1c1e2e; border:1px solid rgba(255,255,255,.07); border-radius:5px;
+  color:#8a8fa3; cursor:pointer;
+}
+.tab.on { background:#2a2d45; color:#fff; border-color:rgba(255,255,255,.14) }
+.tab:focus { outline:none }
+
+/* weekly view */
+.week h3 { font-size:11px; font-weight:700; color:#c3c7de; margin-bottom:8px }
+.dim { font-size:10px; color:#5d617a; font-style:italic }
+.weekrows { padding:2px 0 4px }
+.barrow { display:flex; align-items:center; gap:6px; margin-bottom:4px }
+.wd { width:17px; flex:none; text-align:left; padding-left:4px; font-size:9px; color:#8b90ab }
+.bartrack { flex:1; height:7px; background:rgba(255,255,255,.07); border-radius:3.5px; overflow:hidden }
+.barfill { height:100%; background:linear-gradient(90deg,#5b8cff,#8f7bff); border-radius:3.5px }
+.barrow.today .wd { color:#7aa2ff; font-weight:700 }
+.barrow.today .barfill { background:linear-gradient(90deg,#7aa2ff,#a08bff) }
+.wsec { width:auto; min-width:60px; flex:none; text-align:right; font-size:9px; color:#c3c7de; font-family:Menlo,Consolas,monospace; white-space:nowrap }
+.wsec.zero { color:#5d617a }
+
+.projlist { margin-top:8px; border-top:1px solid rgba(255,255,255,.07); padding-top:8px }
+.proj-row { display:flex; align-items:center; gap:6px; padding:3px 0 }
+.proj-row .dot { width:6px; height:6px; flex:none; border-radius:50%; background:linear-gradient(135deg,#5b8cff,#8f7bff) }
+.pname { flex:1; font-size:10px; color:#c3c7de; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+.ptime { font-size:10px; color:#8a8fa3; font-family:Menlo,Consolas,monospace; flex:none; white-space:nowrap }
+.pshare { width:34px; flex:none; text-align:right; font-size:9px; color:#5d617a }
+
+/* settings */
+.settings label { display:block; font-size:9px; text-transform:uppercase; letter-spacing:.5px; color:#8a8fa3; margin-bottom:4px }
+.settings input[type="number"] {
+  width:64px; padding:4px 6px; background:#14151f; color:#e8e8ec;
+  border:1px solid rgba(255,255,255,.1); border-radius:4px;
+  font-family:Menlo,Consolas,monospace; font-size:11px; text-align:center;
+}
+.settings .row { gap:6px }
+.btnrow { display:flex; gap:6px; flex-wrap:wrap; margin-top:10px }
+.hint { font-size:9px; color:#5d617a; font-style:italic; margin-top:8px; line-height:1.4 }
+.hint code { font-style:normal; font-family:Menlo,Consolas,monospace; color:#8a8fa3 }
+.verbar { font-size:8px; color:#4a4f66; text-align:right; margin-top:6px; font-family:Menlo,Consolas,monospace }
+
+/* buttons */
+.btn {
+  background:#2a2d45; border:1px solid rgba(255,255,255,.08); border-radius:4px;
+  color:#e8e8ec; font-size:10px; font-weight:600; padding:6px 10px; cursor:pointer;
+}
+.btn:hover { background:#343856 }
+.btn.primary { background:#4a90d9; border-color:transparent; color:#fff }
+.btn.primary:hover { background:#5ba0e9 }
+.btn.danger { background:#3a2430; border-color:rgba(255,143,163,.25); color:#ff8fa3 }
+.btn.danger:hover { background:#4a2a38 }
+.btn.wide { width:100%; padding:9px 0 }
+
+/* logs */
+.logbox {
+  font-family:Menlo,Consolas,monospace; font-size:8px; line-height:1.55;
+  color:#ffb26b; background:#101018; border:1px solid rgba(255,255,255,.06);
+  border-radius:4px; padding:6px; max-height:120px; overflow-y:auto;
+  white-space:pre-wrap; word-break:break-word;
+}
+
+/* setup & fatal screens */
+.setup { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; text-align:center; padding:16px }
+.setup .logo { width:46px; height:46px; border:2px solid #4a90d9; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#4a90d9; font-size:20px }
+.setup h1 { font-size:14px; font-weight:700 }
+.setup p { font-size:10px; color:#8a8fa3; max-width:250px; line-height:1.5 }

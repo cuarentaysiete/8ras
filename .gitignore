@@ -1,0 +1,13 @@
+# Data folders created during development / testing
+*.csv
+metrics.json
+.tracker-token.json
+
+# macOS artefacts
+.DS_Store
+
+# Node modules (legacy build artifacts, no longer used)
+node_modules/
+
+# UXP Playground (separate tool -- not part of this plugin)
+UXP\ Playground/
