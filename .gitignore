@@ -11,3 +11,5 @@ node_modules/
 
 # UXP Playground (separate tool -- not part of this plugin)
 UXP\ Playground/
+prompt.md
+Screenshot*.png

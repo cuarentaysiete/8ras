@@ -6,13 +6,14 @@ A lightweight, fully offline Adobe Photoshop UXP plugin that tracks active worki
 
 ## Features
 
-- **Live timer** for the active document — automatically resumes after idle by detecting any undoable step (brush strokes included) via the `historyStates` API, without needing to switch tools or documents.
+- **Live timer** for the active document -- shows the total tracked time TODAY for that file (committed sessions plus the in-flight one), so it never resets on idle pauses or checkpoints. Automatically resumes after idle: the panel polls `historyStates` for any undoable step (brush strokes included) and also listens to Photoshop's own `userIdle` event, so the session reopens on any user input, without needing to switch tools or documents.
 - **Automatic project grouping** by parent folder name, plus "Unsaved Documents" for unsaved canvases.
 - **Idle detection** with a configurable threshold (default: 2 minutes). Sessions are committed when no activity is detected within the threshold period.
-- **Instant commit on document switch** — switching tabs or documents immediately commits the previous session.
-- **Weekly dashboard** ("This week" tab): Monday-to-Sunday view (Mo through Su), horizontal progress bars scaled to a full 24-hour day, per-project breakdown.
-- **Settings panel**: adjust idle threshold, reconfigure the data folder ("Change folder..."), toggle internal log, export CSV, and reset configuration.
-- **Explicit time units**: all durations display as "1h 05m 09s", "4m 12s", or "38s" — never bare clock notation.
+- **Instant commit on document switch** -- switching tabs or documents immediately commits the previous session.
+- **Working hours** (configurable in Settings, default 10:00-18:00): the weekly dashboard colour-codes every day's bar -- green time falls inside the workday window, orange time falls outside it, and Saturday/Sunday always render fully orange. Each bar is one contiguous fill scaled proportionally to that day's total tracked time; the busiest day of the week spans the full track.
+- **Weekly dashboard** ("This week" tab, toggles the whole view on/off): Monday-to-Sunday rows (Mo through Su), proportionally coloured bars per day, "Total this week -- X / Y" header (hours inside / outside the workday), per-project breakdown.
+- **Settings panel**: adjust idle threshold and working hours (start/end time), reconfigure the data folder ("Change folder..."), toggle internal log, export CSV, and reset configuration.
+- **Explicit time units**: all durations display as "1h 05m 09s", "4m 12s", or "38s" -- never bare clock notation.
 - **CSV export**: one row per session, UTF-8 BOM included for Excel compatibility. Format: `date,project,file,session_start,session_end,seconds,active`.
 - **60-second checkpoints**: intermediate saves every minute so no work is lost if Photoshop crashes or closes unexpectedly.
 - **Persistent token**: the selected data folder is remembered between Photoshop sessions using UXP's persistent token mechanism.
@@ -46,7 +47,7 @@ Important: UXP does not support ES modules (`<script type="module">`, dynamic `i
 | File | Contents |
 |---|---|
 | `metrics.json` | `{ version: 1, created: ISO timestamp, projects: { projectName: { files: { fileName: { filePath, totalSeconds, sessions[] } }, totalSeconds }, totals: { days: {}, projects: {} } } }` |
-| `.tracker-token.json` | Metadata marker: app name, version, folder path, threshold, persistent token string, creation date. The actual token is also stored in panel `localStorage`. |
+| `.tracker-token.json` | Metadata marker: app name, version, folder path, threshold, working hours (minutes from midnight), persistent token string, creation date. The actual token is also stored in panel `localStorage`. |
 | `8ras-tracker-YYYYMMDDHHMM.csv` | Generated on each CSV export. |
 
 Session record: `{ id, date, startTime, endTime, seconds, project, file, filePath, isActive }`
@@ -68,9 +69,9 @@ test/smoke.cjs     ← headless test suite (faithful mock of the real PS UXP API
 node test/smoke.cjs
 ```
 
-Covers: fresh install, folder selection + persistent token, activity tracking, idle timeout, document switching, unsaved documents, CSV export, threshold persistence, full restart restore, and folder reconfiguration with data preservation.
+Covers: fresh install, folder selection + persistent token, activity tracking, idle timeout, document switching, unsaved documents, CSV export, threshold persistence, full restart restore, folder reconfiguration with data preservation, and working-hours visualisation (in/out split, persistence, weekend-always-outside rule, toggle behaviour).
 
-All 65 assertions pass across UTC, Europe/Madrid, and America/New_York timezones.
+All 84 assertions pass across UTC, Europe/Madrid, and America/New_York timezones.
 
 ## License
 

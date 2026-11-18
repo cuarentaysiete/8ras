@@ -1,7 +1,7 @@
 'use strict';
 
 /* ════════════════════════════════════════════════════════════════════
-   8ras Time Tracker — v2.1.0
+   8ras Time Tracker — v2.4.1
    Adobe Photoshop UXP panel plugin. Classic script (NO ES modules).
 
    All UXP API calls verified against the official reference
@@ -14,14 +14,15 @@
      file.read()                            → string (utf8 default)
      file.write(data[, {append}])           → replaces unless append
    ══════════════════════════════════════════════════════════════════ */
-console.log('[8ras v2.3.0] main.js loaded');
+console.log('[8ras v2.4.1] main.js loaded');
 
 var NAME = '8ras time tracker';
-var VERSION = '2.3.0';
+var VERSION = '2.4.1';
 var TOKEN_KEY = 'eighras-tracker-token';   // persistent-token key in storage.local
 var TOKEN_FILE = '.tracker-token.json';    // human-readable marker inside the data folder
 var METRICS_FILE = 'metrics.json';
 var CHECKPOINT_MS = 60 * 1000;
+var PS_IDLE_EVENT_SEC = 20;    /* Photoshop's own idle clock for the resume watcher */
 
 var state = {
   stage: 'boot',            // boot | setup | ready | fatal
@@ -30,8 +31,12 @@ var state = {
   isTracking: false,
   liveSeconds: 0,
   weekTotal: 0,
+  weekIn: 0,
+  weekOut: 0,
   weekProjects: [],
   thresholdMin: 2,
+  workStart: 10 * 60,      /* 10:00 — minutes from local midnight */
+  workEnd: 18 * 60,        /* 18:00 */
   folderPath: '',
   showDash: false,
   showSettings: false,
@@ -47,6 +52,7 @@ var ps = null;
 var localFs = null;
 var activityHandle = null;
 var docHandle = null;
+var onUserIdle = null;        /* core 'UI'/'userIdle' callback (resume after idle) */
 var timerId = null;
 var lastTickAt = Date.now();
 var histLast = null;           // last seen historyStates.length → activity probe
@@ -110,6 +116,20 @@ function fmtUnits(totalSec) {
   if (m > 0) return m + 'm ' + p(s) + 's';
   return s + 's';
 }
+
+/* working-hours helpers (minutes from local midnight). */
+function parseHM(v) {
+  if (typeof v !== 'string') return null;
+  var m = /^(\d{1,2}):(\d{2})$/.exec(v.trim());
+  if (!m) return null;
+  var h = parseInt(m[1], 10), mi = parseInt(m[2], 10);
+  if (h > 23 || mi > 59) return null;
+  return h * 60 + mi;
+}
+function hmStr(min) {
+  min = Math.max(0, Math.min(23 * 60 + 59, min));
+  return pad2(Math.floor(min / 60)) + ':' + pad2(min % 60);
+}
 function folderLabel(f) {
   return (f && f.nativePath) || (f && f.path) || String(f || '');
 }
@@ -158,6 +178,31 @@ async function writeTextFile(fdir, name, text) {
   }
   try { await f.write(text); return true; }
   catch (e) { logErr('write ' + name + ' failed: ' + e.message); return false; }
+}
+
+/* ── config persistence (human-readable marker inside the data folder) ── */
+function applyTokenMeta(meta) {
+  if (!meta || typeof meta !== 'object') return;
+  var t = Number(meta.thresholdMinutes);
+  if (t >= 1 && t <= 180) state.thresholdMin = t;
+  var ws = Number(meta.workStartMin), we = Number(meta.workEndMin);
+  if (ws >= 0 && ws < we && we <= 23 * 60 + 59) {
+    state.workStart = ws;
+    state.workEnd = we;
+  }
+}
+async function persistConfig(fdir, extra) {
+  var meta = { app: '8ras-time-tracker', version: VERSION };
+  try {
+    var raw = await readTextFile(fdir, TOKEN_FILE);
+    var parsed = raw ? JSON.parse(raw) : null;
+    if (parsed && typeof parsed === 'object') {
+      for (var k in parsed) if (Object.prototype.hasOwnProperty.call(parsed, k)) meta[k] = parsed[k];
+    }
+  } catch (e) {}
+  for (var k2 in extra) meta[k2] = extra[k2];
+  meta.folderPath = state.folderPath;
+  return writeTextFile(fdir, TOKEN_FILE, JSON.stringify(meta, null, 1));
 }
 
 /* ═══════════════════════════════ metrics model ═════════════════════════════ */
@@ -368,8 +413,12 @@ function stopTracking() {
   if (timerId != null) { clearInterval(timerId); timerId = null; }
   if (ps && ps.action && activityHandle != null) { try { ps.action.removeNotificationListener(activityHandle); } catch (e) {} }
   if (ps && ps.action && docHandle != null) { try { ps.action.removeNotificationListener(docHandle); } catch (e) {} }
+  if (ps && ps.core && onUserIdle && typeof ps.core.removeNotificationListener === 'function') {
+    try { void ps.core.removeNotificationListener('UI', ['userIdle'], onUserIdle); } catch (e) {}
+  }
   activityHandle = null;
   docHandle = null;
+  onUserIdle = null;
 }
 
 function startTracking() {
@@ -378,7 +427,25 @@ function startTracking() {
   try {
     activityHandle = ps.action.addNotificationListener(ACTIVITY_ACTIONS, function () { touchDoc(); });
     docHandle = ps.action.addNotificationListener(DOC_EVENTS, function () { touchDoc(); });
-    log('notification listeners registered');
+    /* Core "user idle" watcher (verified API, minversion 23.3): the first event marks the
+       idle start, and a second one arrives with {idleEnd:true} the moment any input happens
+       again — resumes the session immediately instead of waiting for a new history step. */
+    if (ps.core && typeof ps.core.addNotificationListener === 'function') {
+      onUserIdle = function (name, desc) {
+        if (desc && desc.idleEnd) { try { touchDoc(); } catch (e2) {} }
+      };
+      try {
+        var lp = ps.core.addNotificationListener('UI', ['userIdle'], onUserIdle);
+        if (lp && typeof lp.then === 'function') lp.then(function () {}, function (e) { logErr('userIdle watcher failed: ' + (e && e.message ? e.message : e)); });
+      } catch (e) { logErr('userIdle watcher failed: ' + (e && e.message ? e.message : e)); onUserIdle = null; }
+    }
+    if (ps.core && typeof ps.core.setUserIdleTime === 'function') {
+      try {
+        var sp = ps.core.setUserIdleTime(PS_IDLE_EVENT_SEC);
+        if (sp && typeof sp.then === 'function') sp.then(function () {}, function () {});
+      } catch (e) { /* older build keeps its default idle time */ }
+    }
+    log('notification listeners registered (incl. userIdle resume)');
   } catch (e) {
     logErr('addNotificationListener failed: ' + (e && e.message ? e.message : e));
   }
@@ -393,6 +460,99 @@ function refreshLive() {
 
 /* ═══════════════════════════════ weekly dashboard ══════════════════════════ */
 
+/* Split an absolute interval [aMs,bMs) into seconds inside vs outside the
+   working window of its local day. Weekends count fully as "outside". */
+function splitInterval(aMs, bMs, dayStartMs, isWeekend, wsMin, weMin) {
+  var len = Math.max(0, (bMs - aMs) / 1000);
+  if (len === 0) return { inSec: 0, outSec: 0 };
+  if (isWeekend) return { inSec: 0, outSec: len };
+  function overlap(fromMin, toMin) {
+    var lo = Math.max(aMs, dayStartMs + fromMin * 60000);
+    var hi = Math.min(bMs, dayStartMs + toMin * 60000);
+    return hi > lo ? (hi - lo) / 1000 : 0;
+  }
+  var inSec = overlap(wsMin, weMin);
+  return { inSec: inSec, outSec: Math.max(0, len - inSec) };
+}
+
+/* Gather every committed + live session slice per day of the week. */
+function collectDayFragments(days, nowMs) {
+  var frags = days.map(function () { return []; });
+  function push(st, et, proj) {
+    if (!st || !et) return;
+    et = Math.min(et, nowMs);
+    if (et <= st) return;
+    for (var j = 0; j < days.length; j++) {
+      var ds = days[j].startMs, de = ds + 86400000;
+      var a = Math.max(st, ds), b = Math.min(et, de);
+      if (b > a) frags[j].push({ aMs: a, bMs: b, proj: proj });
+    }
+  }
+  if (metrics && metrics.projects) {
+    for (var p in metrics.projects) {
+      var files = metrics.projects[p].files || {};
+      for (var f in files) {
+        (files[f].sessions || []).forEach(function (s) {
+          push(Date.parse(s.startTime), Date.parse(s.endTime), s.project || p);
+        });
+      }
+    }
+  }
+  for (var k in sessions) {
+    var live = sessions[k];
+    push(live.startTime, nowMs, live.project);
+  }
+  return frags;
+}
+
+/* Contiguous fill for one day's bar, scaled so the busiest day of the week
+   spans the full track (reference look): green = time inside the working
+   window, then orange = time outside it (weekends are fully orange).
+   Returns inner HTML. */
+function barFillsHtml(inSec, outSec, maxSec) {
+  var tot = inSec + outSec;
+  if (tot <= 0 || maxSec <= 0) return '';
+  var totalPct = (tot / maxSec) * 100;
+  var inPct = (inSec / tot) * totalPct;
+  var outPct = (outSec / tot) * totalPct;
+  var MINW = 1.2;                       /* keep slivers visible */
+  if (inPct > 0 && inPct < MINW) inPct = MINW;
+  if (outPct > 0 && outPct < MINW) outPct = MINW;
+  var html = '';
+  if (inPct > 0) html += '<span class="barfill in" style="width:' + inPct.toFixed(2) + '%"></span>';
+  if (outPct > 0) html += '<span class="barfill out" style="left:' + inPct.toFixed(2) + '%;width:' + outPct.toFixed(2) + '%"></span>';
+  return html;
+}
+
+/* Big timer: total tracked time TODAY for the current file (committed sessions
+   plus the in-flight one). It never resets on idle pauses or checkpoints. */
+function fileTodaySec() {
+  var nowMs = Date.now();
+  var t0 = new Date();
+  t0.setHours(0, 0, 0, 0);
+  var startMs = t0.getTime();
+  var tot = 0;
+  function add(st, et) {
+    if (!st || !et) return;
+    et = Math.min(et, nowMs);
+    var a = Math.max(st, startMs), b = Math.min(et, nowMs);
+    if (b > a) tot += (b - a) / 1000;
+  }
+  if (metrics && metrics.projects) {
+    var proj = metrics.projects[state.current.project];
+    if (proj && proj.files && proj.files[state.current.file]) {
+      (proj.files[state.current.file].sessions || []).forEach(function (s) {
+        add(Date.parse(s.startTime), Date.parse(s.endTime));
+      });
+    }
+  }
+  for (var k in sessions) {
+    var s = sessions[k];
+    if (s.project === state.current.project && s.file === state.current.file) add(s.startTime, nowMs);
+  }
+  return Math.round(tot);
+}
+
 function weekRows() {
   var days = [];
   var byProj = {};
@@ -401,34 +561,38 @@ function weekRows() {
   var sinceMonday = dow === 0 ? 6 : dow - 1;    // week starts Monday
   start.setDate(start.getDate() - sinceMonday);
   start.setHours(0, 0, 0, 0);
+  var nowMs = Date.now();
   for (var i = 0; i < 7; i++) {
     var d = new Date(start.getTime() + i * 86400000);
-    var iso = localISO(d);
-    var day = { label: ['Mo','Tu','We','Th','Fr','Sa','Su'][i], iso: iso, sec: 0, today: iso === todayISO() };
-    if (metrics && metrics.totals && metrics.totals.days[iso]) {
-      day.sec = metrics.totals.days[iso].totalSeconds || 0;
-      var bp = metrics.totals.days[iso].byProject || {};
-      for (var pj in bp) byProj[pj] = (byProj[pj] || 0) + bp[pj];
-    }
-    days.push(day);
+    days.push({
+      label: ['Mo','Tu','We','Th','Fr','Sa','Su'][i],
+      iso: localISO(d),
+      startMs: d.getTime(),
+      weekend: i >= 5,
+      today: localISO(d) === todayISO(),
+      sec: 0, inSec: 0, outSec: 0
+    });
   }
-  var nowMs = Date.now();
-  for (var k in sessions) {
-    var s = sessions[k];
-    var d = new Date(s.startTime);
-    d.setHours(0, 0, 0, 0);
-    if (d.getTime() >= start.getTime()) {
-      var iso = localISO(d);
-      for (var j = 0; j < days.length; j++) {
-        if (days[j].iso === iso) { days[j].sec += s.seconds; break; }
-      }
-      byProj[s.project] = (byProj[s.project] || 0) + s.seconds;
+  var frags = collectDayFragments(days, nowMs);
+  for (var j = 0; j < 7; j++) {
+    for (var q = 0; q < frags[j].length; q++) {
+      var sp = splitInterval(frags[j][q].aMs, frags[j][q].bMs, days[j].startMs, days[j].weekend, state.workStart, state.workEnd);
+      days[j].inSec += sp.inSec;
+      days[j].outSec += sp.outSec;
+      byProj[frags[j][q].proj] = (byProj[frags[j][q].proj] || 0) + sp.inSec + sp.outSec;
     }
+    days[j].sec = Math.round(days[j].inSec + days[j].outSec);
   }
   state.weekTotal = 0;
-  days.forEach(function (d) { state.weekTotal += d.sec; });
+  state.weekIn = 0;
+  state.weekOut = 0;
+  days.forEach(function (dd) {
+    state.weekTotal += dd.sec;
+    state.weekIn += dd.inSec;
+    state.weekOut += dd.outSec;
+  });
   var list = [];
-  for (var p in byProj) list.push({ project: p, sec: byProj[p] });
+  for (var p in byProj) list.push({ project: p, sec: Math.round(byProj[p]) });
   list.sort(function (a, b) { return b.sec - a.sec; });
   state.weekProjects = list.slice(0, 8);
   return days;
@@ -465,7 +629,7 @@ function render() {
     html += '<div class="card header"><div class="row"><span class="brand">' + NAME + '<span class="vtag"> v' + VERSION + '</span></span></div></div>';
 
     html += '<div class="card timer ' + (state.isTracking ? 'on' : 'off') + '">' +
-            '<div class="time">' + fmtUnits(state.liveSeconds) + '</div>' +
+            '<div class="time">' + fmtUnits(fileTodaySec()) + '<span class="tday">today</span></div>' +
             '<div class="doc">' + esc(state.current.project) + ' / <b>' + esc(state.current.file) + '</b></div>' +
             '<div class="status">' + (state.isTracking ? '&#9679; tracking' : 'idle&nbsp;<span style="opacity:.6">(pause after ' + state.thresholdMin + ' min)</span>') + '</div>' +
             '</div>';
@@ -477,6 +641,8 @@ function render() {
       html += '<div class="card settings">' +
               '<label>Idle pause after (minutes)</label>' +
               '<input type="number" min="1" max="180" step="1" value="' + state.thresholdMin + '" id="threshold" data-change="setThreshold">' +
+              '<label class="lbl2">Working hours</label>' +
+              '<div class="whrow"><input type="time" id="workStart" value="' + hmStr(state.workStart) + '" data-change="setWorkHours"><span class="to">to</span><input type="time" id="workEnd" value="' + hmStr(state.workEnd) + '" data-change="setWorkHours"></div>' +
               '<div class="btnrow">' +
               '<button class="btn" data-action="exportCsv">Export CSV</button>' +
               '<button class="btn primary" data-action="configure">Change folder&hellip;</button>' +
@@ -490,18 +656,19 @@ function render() {
               (state.showLogs ? logHtml() : '') +
               '</div>';
     } else if (state.showDash) {
-      html += '<div class="card week"><h3>This week — ' + fmtUnits(state.weekTotal) + '</h3>';
+      var maxSec = 0;
+      days.forEach(function (d) { if (d.sec > maxSec) maxSec = d.sec; });
+      html += '<div class="card week"><h3>Total this week — <span class="tin">' + fmtUnits(Math.round(state.weekIn)) + '</span> / <span class="tout">' + fmtUnits(Math.round(state.weekOut)) + '</span></h3>';
       if (!state.weekProjects.length && state.weekTotal === 0) {
         html += '<p class="dim">No tracked time this week yet.</p>';
       } else {
         html += '<div class="weekrows">';
         days.forEach(function (d) {
-          var pct = Math.min(100, Math.round((d.sec / 86400) * 100));
-          html += '<div class="barrow' + (d.today ? ' today' : '') + '" title="' + d.iso + '"><span class="wd">' + d.label + '</span>' +
-                  '<div class="bartrack"><div class="barfill" style="width:' + pct + '%"></div></div>' +
+          html += '<div class="barrow' + (d.today ? ' today' : '') + '" title="' + d.iso + (d.sec >= 1 ? ' — ' + fmtUnits(d.sec) : '') + '"><span class="wd">' + d.label + '</span>' +
+                  '<div class="bartrack">' + barFillsHtml(d.inSec, d.outSec, maxSec) + '</div>' +
                   '<span class="wsec' + (d.sec < 1 ? ' zero' : '') + '">' + (d.sec >= 1 ? fmtUnits(d.sec) : '&mdash;') + '</span></div>';
         });
-        html += '</div><div class="hint" style="margin-top:2px">bars scale to a full day (24h)</div>';
+        html += '</div><div class="hint" style="margin-top:2px">bars scaled to the busiest day &middot; green inside ' + hmStr(state.workStart) + '-' + hmStr(state.workEnd) + ' &middot; orange outside &middot; weekends always orange</div>';
         if (state.weekProjects.length) {
           html += '<div class="projlist">';
           state.weekProjects.forEach(function (p) {
@@ -564,14 +731,8 @@ async function configure() {
     folder = f;
     state.folderPath = folderLabel(f);
 
-    /* restore previous settings (threshold) before overwriting the token file */
-    var prevRaw = await readTextFile(f, TOKEN_FILE);
-    if (prevRaw) {
-      try {
-        var prev = JSON.parse(prevRaw);
-        if (Number(prev.thresholdMinutes) >= 1 && Number(prev.thresholdMinutes) <= 180) state.thresholdMin = Number(prev.thresholdMinutes);
-      } catch (e) {}
-    }
+    /* restore previous settings (threshold, working hours) before overwriting */
+    try { applyTokenMeta(JSON.parse(await readTextFile(f, TOKEN_FILE))); } catch (e) {}
 
     var token;
     try {
@@ -586,6 +747,8 @@ async function configure() {
       folderPath: state.folderPath,
       persistentToken: token || null,
       thresholdMinutes: state.thresholdMin,
+      workStartMin: state.workStart,
+      workEndMin: state.workEnd,
       createdAt: new Date().toISOString()
     };
     await writeTextFile(f, TOKEN_FILE, JSON.stringify(tokenMeta, null, 1));
@@ -687,12 +850,7 @@ async function init() {
         folder = entry;
         state.folderPath = folderLabel(entry);
         var metaRaw = await readTextFile(folder, TOKEN_FILE);
-        if (metaRaw) {
-          try {
-            var meta = JSON.parse(metaRaw);
-            if (Number(meta.thresholdMinutes) >= 1) state.thresholdMin = Number(meta.thresholdMinutes);
-          } catch (e) {}
-        }
+        if (metaRaw) { try { applyTokenMeta(JSON.parse(metaRaw)); } catch (e) {} }
         var raw = await readTextFile(folder, METRICS_FILE);
         if (raw) {
           try { metrics = JSON.parse(raw); if (!metrics.projects) metrics = emptyMetrics(); log('restored metrics from disk'); }
@@ -724,7 +882,7 @@ async function init() {
 /* ── panel-visible action bridge (onclick handlers) ── */
 window.__action = function (name, arg) {
   if (name === 'toggleLog') { state.showLogs = !state.showLogs; render(); }
-  else if (name === 'dash') { state.showDash = true; state.showSettings = false; render(); }
+  else if (name === 'dash') { state.showDash = !state.showDash; state.showSettings = false; render(); }
   else if (name === 'settings') { state.showSettings = true; state.showDash = false; render(); }
   else if (name === 'configure') { void configure(); }
   else if (name === 'exportCsv') { void exportCsv(); }
@@ -737,13 +895,23 @@ window.__action = function (name, arg) {
     if (isNaN(v) || v < 1) v = 1;
     if (v > 180) v = 180;
     state.thresholdMin = v;
-    if (folder) {
-      readTextFile(folder, TOKEN_FILE).then(function (raw) {
-        var meta = { app: '8ras-time-tracker', version: VERSION, folderPath: state.folderPath, thresholdMinutes: v, updatedAt: new Date().toISOString() };
-        return writeTextFile(folder, TOKEN_FILE, JSON.stringify(meta, null, 1));
-      }).catch(function () {});
-      log('idle threshold set to ' + v + ' min');
+    if (folder) void persistConfig(folder, { thresholdMinutes: v, updatedAt: new Date().toISOString() });
+    log('idle threshold set to ' + v + ' min');
+    render();
+  }
+  else if (name === 'setWorkHours') {
+    var ia = $('workStart'), ib = $('workEnd');
+    if (!ia || !ib) return;
+    var pa = parseHM(ia.value), pb = parseHM(ib.value);
+    if (pa == null || pb == null || pa >= pb) {
+      logErr('invalid working hours (' + ia.value + ' - ' + ib.value + ') — start must be before end');
+      render();
+      return;
     }
+    state.workStart = pa;
+    state.workEnd = pb;
+    if (folder) void persistConfig(folder, { workStartMin: pa, workEndMin: pb, updatedAt: new Date().toISOString() });
+    log('working hours set to ' + hmStr(pa) + '-' + hmStr(pb));
     render();
   }
 };
@@ -784,7 +952,9 @@ window.__debug = {
   tick: tick,
   flushActive: flushActive,
   todayISO: todayISO,
-  localISO: localISO
+  localISO: localISO,
+  splitInterval: splitInterval,
+  fileTodaySec: fileTodaySec
 };
 
 /* ── boot ── */

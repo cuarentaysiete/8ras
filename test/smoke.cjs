@@ -28,11 +28,18 @@ function assert(cond, name) {
 
 /* ── Shared mocks (persist across simulated "panel reloads") ── */
 let activityCbs = [];
+let coreCbs = [];
+let idleTimes = [];
 const psMock = {
   app: { activeDocument: { name: 'poster.psd', path: '/Projects/Nike_Campaign/poster.psd', historyStates: { length: 5 } } },
   action: {
     addNotificationListener(names, cb) { activityCbs.push(cb); return activityCbs.length; },
     removeNotificationListener() {}
+  },
+  core: {
+    setUserIdleTime(sec) { idleTimes.push(sec); return Promise.resolve(); },
+    addNotificationListener(group, events, cb) { coreCbs.push({ group, events, cb }); return Promise.resolve(); },
+    removeNotificationListener() { return Promise.resolve(); }
   }
 };
 
@@ -94,7 +101,12 @@ const appEl = {
   querySelectorAll: () => [],
   querySelector: () => null
 };
-const inputEl = { value: '' };
+const els = {
+  app: appEl,
+  threshold: { value: '' },
+  workStart: { value: '' },
+  workEnd: { value: '' }
+};
 
 function buildSandbox() {
   const sandbox = {
@@ -103,7 +115,7 @@ function buildSandbox() {
     alert: () => {},
     confirm: () => true,
     document: {
-      getElementById: (id) => (id === 'app' ? appEl : inputEl),
+      getElementById: (id) => els[id] || null,
       activeElement: null,
       visibilityState: 'visible',
       addEventListener: () => {},
@@ -150,7 +162,7 @@ console.log('\n== 8ras Time Tracker — smoke test ==\n');
   await settle();
   const dbg = sb.__debug;
   assert(!!dbg, '__debug hook exposed');
-  assert(appEl.innerHTML.includes('v2.3.0'), 'version banner visible in UI');
+  assert(appEl.innerHTML.includes('v2.4.1'), 'version banner visible in UI');
   assert(appEl.innerHTML.includes('8ras time tracker'), 'official name shown');
   assert(dbg.state().stage === 'setup', 'initial stage is "setup"');
   assert(appEl.innerHTML.includes('Select folder'), 'setup screen rendered');
@@ -171,7 +183,9 @@ console.log('\n== 8ras Time Tracker — smoke test ==\n');
   const tokenMeta = JSON.parse(folderData['.tracker-token.json']);
   assert(tokenMeta.folderPath === TRACKER_PATH, 'token file stores folderPath');
   assert(tokenMeta.persistentToken === store['eighras-tracker-token'], 'token file matches stored token');
-  assert(activityCbs.length >= 2, 'two notification listeners registered');
+  assert(activityCbs.length >= 2, 'two action notification listeners registered');
+  assert(coreCbs.length === 1 && coreCbs[0].group === 'UI' && coreCbs[0].events.join(',') === 'userIdle',
+         'core userIdle watcher registered (resume after idle)');
   assert(!/onclick\s*=/.test(appEl.innerHTML), 'ready UI free of inline handlers');
   assert(appEl.innerHTML.includes('8ras time tracker'), 'header uses official name');
   assert(!appEl.innerHTML.includes('weekrows') && appEl.innerHTML.includes('for the dashboard'),
@@ -197,6 +211,7 @@ console.log('\n== 8ras Time Tracker — smoke test ==\n');
   console.log('\n[4] Idle timeout (simulated 3 min of no events)');
   const key = Object.keys(dbg.sessions())[0];
   dbg.sessions()[key].seconds += 120;                    // pretend 2 min of work
+  dbg.sessions()[key].startTime = Date.now() - 120000;   // …starting 2 min ago (timestamps stay honest)
   dbg.sessions()[key].lastEvent = new Date(Date.now() - 3 * 60 * 1000);
   dbg.tick();
   await settle(80);
@@ -227,8 +242,18 @@ console.log('\n== 8ras Time Tracker — smoke test ==\n');
   const tdays = dbg.metrics().totals.days;
   assert(!!tdays[expectLocal] && tdays[expectLocal].totalSeconds >= 120,
          'committed time lands on the TODAY local date key (no UTC shift)');
-  assert(appEl.innerHTML.includes('This week') && appEl.innerHTML.includes('2m 00s'), 'durations show explicit units (2m 00s)');
-  assert(appEl.innerHTML.includes('bars scale to a full day'), '24h bar scale is noted');
+  const h3m = appEl.innerHTML.match(/<span class="tin">([^<]*)<\/span> \/ <span class="tout">([^<]*)<\/span>/);
+  const unitRe = /^(?:\d+h )?(?:\d+m )?\d+s$/;
+  assert(h3m && unitRe.test(h3m[1]) && unitRe.test(h3m[2]),
+         'weekly header times carry explicit units ("Hh MMm SSs")');
+  assert(/barfill (in|out)" style="[^"]*width:100\.00%"/.test(appEl.innerHTML),
+         'busiest day spans the full track (proportional scale)');
+  assert(appEl.innerHTML.includes('Total this week — <span class="tin">') && appEl.innerHTML.includes('<span class="tout">'),
+         '"Total this week" splits the total into in/out colour spans');
+  assert(appEl.innerHTML.includes('green inside 10:00-18:00'), 'bar caption explains axis and colours');
+  /* big timer = cumulative TODAY for the current file (committed + in-flight) */
+  const tSec = dbg.fileTodaySec();
+  assert(tSec >= 120, 'fileTodaySec() includes committed time for the current file (' + tSec + 's)');
 
   /* idle → user keeps working with the SAME tool: history stack grows → tracking must resume
      without any doc/tool switch (the reported v2.2.0 gap) */
@@ -285,7 +310,7 @@ console.log('\n== 8ras Time Tracker — smoke test ==\n');
 
   /* ── Scenario 8: threshold persistence + full panel restart ── */
   console.log('\n[8] Threshold change + restart (config restore)');
-  inputEl.value = '5';
+  els.threshold.value = '5';
   sb.__action('setThreshold');
   await settle(80);
   const token2 = JSON.parse(folderData['.tracker-token.json']);
@@ -293,6 +318,7 @@ console.log('\n== 8ras Time Tracker — smoke test ==\n');
 
   // Simulate closing and reopening the panel: brand-new context, same disk + storage.
   activityCbs = [];
+  coreCbs = [];
   psMock.app.activeDocument = { name: 'poster.psd', path: '/Projects/Nike_Campaign/poster.psd' };
   const sb2 = buildSandbox();
   vm.runInContext(code, sb2, { filename: 'plugin-reload.js', timeout: 5000 });
@@ -302,13 +328,28 @@ console.log('\n== 8ras Time Tracker — smoke test ==\n');
   assert(dbg2.state().folderPath === TRACKER_PATH, 'restored folder path');
   assert(dbg2.state().thresholdMin === 5, 'restored threshold (5 min)');
   assert(!!dbg2.metrics() && !!dbg2.metrics().projects.Nike_Campaign, 'restored metrics cache from disk');
-  assert(activityCbs.length >= 2, 'listeners re-registered on boot');
+  assert(activityCbs.length >= 2, 'action listeners re-registered on boot');
+  assert(coreCbs.length === 1, 'core userIdle watcher re-registered on boot');
   assert(dbg2.logs().some(l => l.includes('restored folder from token')), 'log confirms token restore');
 
   // Live timer still works after restore
   fireActivity();
   await settle();
   assert(dbg2.state().current.file === 'poster.psd', 'tracking resumes after restart');
+
+  /* ── Scenario 11: resume after idle via the core userIdle event ── */
+  console.log('\n[11] Resume after idle (core userIdle idleEnd)');
+  dbg2.flushActive();
+  await settle(50);
+  const idleCb = coreCbs[coreCbs.length - 1].cb;
+  assert(typeof idleCb === 'function', 'core userIdle callback is wired');
+  const nBefore = Object.keys(dbg2.sessions()).length;
+  idleCb('userIdle', {});                       // idle START — must be ignored
+  assert(Object.keys(dbg2.sessions()).length === nBefore, 'idle-start event creates no session');
+  idleCb('userIdle', { idleEnd: true });        // user input again → resume
+  await settle(50);
+  assert(Object.keys(dbg2.sessions()).length === nBefore + 1, 'idleEnd event reopens a live session');
+  assert(idleTimes.length > 0 && idleTimes[idleTimes.length - 1] > 0, 'setUserIdleTime(>0) requested at startup');
 
   /* ── Result ── */
   /* ── Scenario 9: reconfigure the data folder from settings ── */
@@ -325,6 +366,94 @@ console.log('\n== 8ras Time Tracker — smoke test ==\n');
   fireActivity();
   await settle();
   assert(dbg2.state().current.file === 'poster_b.psd', 'tracking continues after folder change');
+
+  /* ── Scenario 10: working hours & coloured daily bars ── */
+  console.log('\n[10] Working hours (green inside / orange outside)');
+  const DS = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); })();
+  const HH = 3600000;
+  const sp1 = dbg2.splitInterval(DS + 11 * HH, DS + 12 * HH, DS, false, 10 * 60, 18 * 60);
+  assert(sp1.inSec === 3600 && sp1.outSec === 0, 'splitInterval: 11-12h inside 10-18h is fully inside');
+  const sp2 = dbg2.splitInterval(DS + 17 * HH, DS + 19 * HH, DS, false, 10 * 60, 18 * 60);
+  assert(sp2.inSec === 3600 && sp2.outSec === 3600, 'splitInterval: 17-19h straddles close → 1h in / 1h out');
+  const sp3 = dbg2.splitInterval(DS + 12 * HH, DS + 13 * HH, DS, true, 10 * 60, 18 * 60);
+  assert(sp3.inSec === 0 && sp3.outSec === 3600, 'splitInterval: weekend time is always outside');
+
+  if (!dbg2.state().showDash) dbg2.action('dash');
+  await settle(50);
+
+  /* settings inputs apply and persist */
+  els.workStart.value = '09:00';
+  els.workEnd.value = '17:00';
+  dbg2.action('setWorkHours');
+  await settle(80);
+  assert(dbg2.state().workStart === 540 && dbg2.state().workEnd === 1020, 'working hours applied from settings (09:00-17:00)');
+  const tok10 = JSON.parse(folderData['.tracker-token.json']);
+  assert(tok10.workStartMin === 540 && tok10.workEndMin === 1020, 'working hours persisted in the token file');
+  assert(appEl.innerHTML.includes('green inside 09:00-17:00'), 'caption reflects the new workday');
+
+  const hm = m => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+
+  /* weekend row: only testable once Sat/Sun has started this week (unit test above covers the rule) */
+  const dowNow = new Date().getDay();           // 0=Sun … 6=Sat
+  if (dowNow === 0 || dowNow === 6) {
+    let wkA, wkB, wkIdx;
+    if (dowNow === 6) {                         // today is Saturday → use Sunday (in progress)
+      wkIdx = 7;
+      wkB = Math.floor(Date.now() / 60000) * 60000;
+      wkA = wkB - 30 * 60000;
+    } else {                                    // today is Sunday → Saturday fully past
+      wkIdx = 6;
+      const sat = new Date();
+      sat.setHours(12, 0, 0, 0);
+      sat.setDate(sat.getDate() - 1);
+      wkA = sat.getTime();
+      wkB = wkA + HH;
+    }
+    dbg2.metrics().projects.Nike_Campaign.files['poster.psd'].sessions.push({
+      id: 't-wk', date: '', startTime: new Date(wkA).toISOString(), endTime: new Date(wkB).toISOString(),
+      seconds: Math.round((wkB - wkA) / 1000), project: 'Nike_Campaign', file: 'poster.psd',
+      filePath: '/Projects/Nike_Campaign/poster.psd', isActive: false
+    });
+    dbg2.action('settings');
+    dbg2.action('dash');
+    await settle(80);
+    const rowsArr = appEl.innerHTML.split('<div class="barrow');
+    assert(rowsArr.length === 8, 'seven day rows present for the weekend check');
+    const wkRow = rowsArr[wkIdx];
+    assert(wkRow.includes('barfill out'), 'weekend session rendered on its day');
+    assert(wkRow.indexOf('barfill in') === -1, 'weekend time never renders green');
+  } else {
+    console.log('   (weekend e2e skipped — Sat/Sun not reached yet this week; unit test above covers the rule)');
+  }
+
+  /* deterministic GREEN: point the workday at "now" and log a 30-min session around it */
+  const ancMin = (() => { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); })();
+  let aw = ancMin >= 70 ? ancMin - 60 : 0;
+  let bw = ancMin >= 70 ? Math.min(ancMin + 60, 1439) : ancMin + 60;
+  if (bw <= aw + 1) { aw = 0; bw = Math.max(2, Math.min(ancMin + 60, 1439)); }
+  els.workStart.value = hm(aw);
+  els.workEnd.value = hm(bw);
+  dbg2.action('setWorkHours');
+  await settle(50);
+  const ancEnd = Date.now();
+  dbg2.metrics().projects.Nike_Campaign.files['poster.psd'].sessions.push({
+    id: 't-anc', date: '', startTime: new Date(ancEnd - 30 * 60000).toISOString(),
+    endTime: new Date(ancEnd).toISOString(),
+    seconds: 1800, project: 'Nike_Campaign', file: 'poster.psd',
+    filePath: '/Projects/Nike_Campaign/poster.psd', isActive: false
+  });
+  dbg2.action('settings');
+  dbg2.action('dash');
+  await settle(80);
+  assert(appEl.innerHTML.includes('barfill in'), 'a session inside the workday renders a green segment');
+  assert(/Total this week — <span class="tin">[^<]*<\/span> \/ <span class="tout">[^<]*<\/span><\/h3>/.test(appEl.innerHTML),
+         '"Total this week —" shows the in/out split in colour');
+
+  /* "This week" toggles the whole summary off again */
+  dbg2.action('dash');
+  await settle(50);
+  assert(!appEl.innerHTML.includes('weekrows') && appEl.innerHTML.includes('for the dashboard'),
+         'pressing "This week" again hides the weekly summary');
 
   console.log('\n== result: ' + passed + ' passed, ' + failed + ' failed ==\n');
   process.exit(failed ? 1 : 0);

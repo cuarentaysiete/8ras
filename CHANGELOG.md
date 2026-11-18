@@ -2,6 +2,29 @@
 
 All notable changes to 8ras Time Tracker are documented here.
 
+## [2.4.1] - 2025-11-17
+
+### Fixed
+- **Daily bar fills restored to the reference look**: each day's bar is again one contiguous fill scaled proportionally to that day's tracked time (the busiest day spans the full track), with the green (inside-workday) portion followed by the orange (outside) portion -- instead of thin ticks positioned at their time of day, which read as broken.
+- **Reliable resume after idle**: the panel now also listens to Photoshop's own `userIdle` events (core API, minversion 23.3). The first event marks the idle start; when the user makes any input again a second event arrives with `{idleEnd:true}` and the session resumes immediately, without waiting for a new history step. This also removes the spurious `toolModalStateChanged` "Unsupported tool id" console errors.
+
+### Changed
+- Dashboard caption now reads "bars scaled to the busiest day ..." to describe the proportional scale.
+- Test suite expanded from 77 to 84 assertions: core `userIdle` registration on boot and restart, idle-start ignored / `idleEnd` resumes, proportional full-track fill.
+
+## [2.4.0] - 2025-11-17
+
+### Added
+- Working hours window in Settings (start and end time, default 10:00-18:00), persisted alongside the idle threshold in `.tracker-token.json`.
+- Colour-coded daily bars in the weekly dashboard: green segments fall inside the workday window, orange segments fall outside it; Saturday and Sunday always render orange. The bar axis starts one hour before the workday and extends four hours after it, so overtime at the end of the day has room to show.
+- "Total this week -- X / Y" header splitting the weekly total into time inside and outside the workday, each value shown in its colour.
+
+### Changed
+- The big timer now shows today's cumulative tracked time for the active file (committed sessions plus the in-flight one) instead of only the live session, so it no longer resets to zero on idle pauses or 60-second checkpoints.
+- The "This week" tab now toggles the entire weekly summary on and off.
+- Daily bar fills are positioned by time of day (where the work happened) rather than a single width proportional to the total.
+- Test suite expanded from 65 to 77 assertions: interval in/out splitting, working-hours persistence, weekend-always-outside rule, timer accumulation, and dashboard toggle.
+
 ## [2.3.0] - 2025-11-17
 
 ### Fixed

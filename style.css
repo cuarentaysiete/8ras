@@ -30,6 +30,7 @@ body {
 }
 .timer.on .time { color:#7ee2a8 }
 .timer.off .time { color:#8a8fa3 }
+.time .tday { font-family:-apple-system, sans-serif; font-size:9px; font-weight:600; letter-spacing:.5px; color:#8a8fa3; margin-left:6px; vertical-align:4px }
 .doc { text-align:center; font-size:10px; color:#8a8fa3; margin-top:4px; line-height:1.4 }
 .doc b { color:#e8e8ec; font-weight:600; word-break:normal; overflow-wrap:anywhere }
 .status { text-align:center; font-size:9px; margin-top:5px; color:#2ecc71; letter-spacing:.3px }
@@ -51,10 +52,14 @@ body {
 .weekrows { padding:2px 0 4px }
 .barrow { display:flex; align-items:center; gap:6px; margin-bottom:4px }
 .wd { width:17px; flex:none; text-align:left; padding-left:4px; font-size:9px; color:#8b90ab }
-.bartrack { flex:1; height:7px; background:rgba(255,255,255,.07); border-radius:3.5px; overflow:hidden }
-.barfill { height:100%; background:linear-gradient(90deg,#5b8cff,#8f7bff); border-radius:3.5px }
+.bartrack { position:relative; flex:1; height:7px; background:rgba(255,255,255,.07); border-radius:3.5px; overflow:hidden }
+.barfill { position:absolute; top:0; height:100% }
+.barfill.in { background:#4caf50 }
+.barfill.out { background:#cf9148 }
+.week h3 .tin { color:#4caf50 }
+.week h3 .tout { color:#cf9148 }
 .barrow.today .wd { color:#7aa2ff; font-weight:700 }
-.barrow.today .barfill { background:linear-gradient(90deg,#7aa2ff,#a08bff) }
+.barrow.today .barfill { filter:brightness(1.2) }
 .wsec { width:auto; min-width:60px; flex:none; text-align:right; font-size:9px; color:#c3c7de; font-family:Menlo,Consolas,monospace; white-space:nowrap }
 .wsec.zero { color:#5d617a }
 
@@ -67,6 +72,14 @@ body {
 
 /* settings */
 .settings label { display:block; font-size:9px; text-transform:uppercase; letter-spacing:.5px; color:#8a8fa3; margin-bottom:4px }
+.settings .lbl2 { margin-top:10px }
+.whrow { display:flex; align-items:center; gap:6px }
+.whrow .to { font-size:9px; color:#8a8fa3 }
+.settings input[type="time"] {
+  width:74px; padding:4px 6px; background:#14151f; color:#e8e8ec;
+  border:1px solid rgba(255,255,255,.1); border-radius:4px;
+  font-family:Menlo,Consolas,monospace; font-size:11px;
+}
 .settings input[type="number"] {
   width:64px; padding:4px 6px; background:#14151f; color:#e8e8ec;
   border:1px solid rgba(255,255,255,.1); border-radius:4px;
